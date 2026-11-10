@@ -8,7 +8,8 @@ const VERSION = 1;
 
 export type InputMode = "voice_activity" | "push_to_talk";
 export type VadSensitivity = "auto" | number;
-export type ThemeName = "dark" | "light";
+/** Nombre de un tema incluido (dark, light, gruvbox…) o propio (~/.config/zcord/themes/<nombre>.json). */
+export type ThemeName = string;
 /** Estado propio elegido a mano (el "ausente" automático por inactividad no se guarda acá). */
 export type OwnStatus = "online" | "idle" | "dnd" | "invisible";
 export const OWN_STATUSES: OwnStatus[] = ["online", "idle", "dnd", "invisible"];
@@ -140,7 +141,7 @@ export function normalizeSettings(raw: unknown): Settings {
     inputDevice: parseDevice(record.inputDevice),
     outputDevice: parseDevice(record.outputDevice),
     userVolumes: parseVolumes(record.userVolumes),
-    theme: record.theme === "light" || record.theme === "dark" ? record.theme : DEFAULT_SETTINGS.theme,
+    theme: typeof record.theme === "string" && /^[a-z0-9][a-z0-9-]{0,39}$/.test(record.theme) ? record.theme : DEFAULT_SETTINGS.theme,
     idleAfterMinutes: parseIdle(record.idleAfterMinutes),
     inlineImages: typeof record.inlineImages === "boolean" ? record.inlineImages : DEFAULT_SETTINGS.inlineImages,
     animateImages: typeof record.animateImages === "boolean" ? record.animateImages : DEFAULT_SETTINGS.animateImages,

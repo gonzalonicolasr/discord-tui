@@ -7,7 +7,12 @@ import { KITTY_KEYBOARD } from "../src/ui/kitty";
 import { App } from "../src/ui/App";
 import { APP_NAME } from "../src/ui/brand";
 import { buildDemoStore, demoActions } from "./demo-state";
+import { themesDir } from "../src/config/paths";
+import { registerThemes } from "../src/ui/theme";
+import { loadUserThemes } from "../src/ui/theme-files";
 
+// Los temas propios (~/.config/zcord/themes) también se ven en la demo: sirve para probarlos sin loguearse.
+loadUserThemes(themesDir(), registerThemes);
 const store = buildDemoStore();
 const actions = demoActions(store);
 const renderer = await createCliRenderer({ useKittyKeyboard: KITTY_KEYBOARD });

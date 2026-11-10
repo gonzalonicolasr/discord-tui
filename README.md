@@ -20,6 +20,8 @@ salir de la terminal. Se usa con el mouse como Discord o con el teclado estilo v
 - **Chat de los canales de voz,** sin tener que entrar a la llamada.
 - **Pantalla compartida (Go Live):** elegís qué monitor transmitir.
 - **Ver la transmisión de otros** dentro de la terminal.
+- **Temas:** seis incluidos (Catppuccin oscuro y claro, Gruvbox, Tokyo Night, Nord, Dracula) y los tuyos en
+  `~/.config/zcord/themes/` con un JSON chico. Ver [docs/themes.md](docs/themes.md).
 - **Todo clickeable** (sin ids que tipear), con `Ctrl-k` para saltar a cualquier canal, tu estado
   (en línea / ausente / no molestar) y listas de miembros grandes.
 

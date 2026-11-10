@@ -25,3 +25,11 @@ export function settingsPath(): string {
 export function logPath(): string {
   return join(stateDir(), "discord-tui.log");
 }
+
+/**
+ * Temas propios: `$XDG_CONFIG_HOME/zcord/themes/*.json`. Van en una carpeta aparte de `discord-tui/` (donde está
+ * la sesión) para poder compartirlos o versionarlos sin acercarse a ese archivo.
+ */
+export function themesDir(): string {
+  return join(xdg("XDG_CONFIG_HOME", join(homedir(), ".config")), "zcord", "themes");
+}

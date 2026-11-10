@@ -1,0 +1,22 @@
+{
+  "label": "Kanagawa",
+  "palette": {
+    "bg": "#1f1f28",
+    "panel": "#16161d",
+    "selection": "#2d4f67",
+    "faint": "#54546d",
+    "dim": "#a3a3a0",
+    "fg": "#dcd7ba",
+    "accent": "#7e9cd8",
+    "red": "#e46876",
+    "orange": "#ffa066",
+    "yellow": "#e6c384",
+    "green": "#98bb6c",
+    "cyan": "#7fb4ca",
+    "purple": "#957fb8",
+    "pink": "#d27e99"
+  },
+  "colors": {
+    "unread": "#e6c384"
+  }
+}

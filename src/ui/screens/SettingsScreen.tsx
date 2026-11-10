@@ -9,7 +9,7 @@ import { createVad } from "../../voice/vad";
 import type { AudioDevice } from "../../voice/devices";
 import { LevelMeter } from "../components/LevelMeter";
 import { useSelector } from "../store-bridge";
-import { useTheme } from "../theme";
+import { cycleTheme, themeEntries, themeLabel, useTheme } from "../theme";
 import { Button, type Click } from "../components/Button";
 import { statusLabel } from "../components/StatusMenu";
 import { OWN_STATUSES, STREAM_QUALITIES } from "../../settings/settings";
@@ -180,7 +180,7 @@ export function SettingsScreen(props: {
       else patch({ status: next });
       return;
     }
-    if (section === "theme" && dir === 0) return patch({ theme: settings().theme === "dark" ? "light" : "dark" });
+    if (section === "theme") return patch({ theme: cycleTheme(settings().theme, dir === -1 ? -1 : 1) });
     if (section === "images" && dir === 0) patch({ inlineImages: !settings().inlineImages });
     if (section === "animate" && dir === 0) patch({ animateImages: !settings().animateImages });
     if (section === "avatars" && dir === 0) patch({ showAvatars: !settings().showAvatars });
@@ -299,7 +299,7 @@ export function SettingsScreen(props: {
         <text fg={theme().header}>Cuenta</text>
         {line("status", `estado: ${statusLabel(settings().status)}  (Enter o h/l)`)}
         <text fg={theme().header}>Apariencia</text>
-        {line("theme", `tema: ${settings().theme === "dark" ? "oscuro" : "claro"}`)}
+        {line("theme", `tema: ${themeLabel(settings().theme)}  (Enter o h/l · ${themeEntries().length} temas)`)}
         {line("images", `imágenes inline: ${settings().inlineImages ? "sí" : "no (solo links)"}`)}
         {line("animate", `animar GIFs y emojis: ${settings().animateImages ? "sí" : "no (primer cuadro)"}`)}
         {line("avatars", `avatares: ${settings().showAvatars ? "sí" : "no"}`)}

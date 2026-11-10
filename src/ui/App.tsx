@@ -6,6 +6,7 @@ import type { Actions } from "../actions";
 import { log } from "../log/logger";
 import { COMMON_EMOJI } from "../emoji/common";
 import { animationScheduler } from "../images/animation";
+import { takeThemeErrors } from "./theme-files";
 import { userAvatarUrl } from "../images/avatar";
 import { parseMarkdown, plainText } from "../markdown/parse";
 import {
@@ -1196,6 +1197,9 @@ export function App(props: {
   renderer.on("selection", onSelection);
   onCleanup(() => renderer.off("selection", onSelection));
 
+  onMount(() => {
+    takeThemeErrors().forEach((text, i) => props.store.dispatch({ type: "notice/push", key: `theme-file-${i}`, level: "warn", text }));
+  });
   onMount(() => {
     const unsubscribe = props.store.subscribe(() => {
       const state = props.store.getState();

@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
-import { THEMES, useTheme } from "../../src/ui/theme";
+import { getTheme, registerThemes, resetThemes, THEMES, useTheme } from "../../src/ui/theme";
+import { parseThemeFile } from "../../src/ui/theme-files";
 import { createStore, emptyState } from "../../src/store/store";
 
 describe("THEMES", () => {
@@ -16,6 +17,17 @@ describe("THEMES", () => {
     expect(theme()).toEqual(THEMES.dark);
     store.dispatch({ type: "settings/set", patch: { theme: "light" } });
     expect(theme()).toEqual(THEMES.light);
+  });
+
+  test("useTheme follows built-in extras and custom themes", () => {
+    const store = createStore(emptyState());
+    const theme = useTheme(store);
+    store.dispatch({ type: "settings/set", patch: { theme: "gruvbox" } });
+    expect(theme().bg).toBe(getTheme("gruvbox").bg);
+    registerThemes([parseThemeFile(JSON.stringify({ extends: "dracula", colors: { bg: "#010203" } }), "mio.json")]);
+    store.dispatch({ type: "settings/set", patch: { theme: "mio" } });
+    expect(theme().bg).toBe("#010203");
+    resetThemes();
   });
 });
 

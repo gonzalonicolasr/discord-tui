@@ -11,6 +11,9 @@ import { fetchBuildNumber } from "./client-props/build-number";
 import { createClientProps } from "./client-props/props";
 import { createHttp } from "./rest/http";
 import { loadSettings } from "./settings/settings";
+import { themesDir } from "./config/paths";
+import { registerThemes } from "./ui/theme";
+import { loadUserThemes } from "./ui/theme-files";
 import { APP_NAME } from "./ui/brand";
 
 export function assertTty(stream: { isTTY?: boolean }): string | null {
@@ -26,6 +29,7 @@ async function main(): Promise<void> {
 
   const { value: buildNumber } = await fetchBuildNumber({ fetch });
   const settings = await loadSettings();
+  loadUserThemes(themesDir(), registerThemes);
   const result = await boot(process.argv.slice(2), {
     loadSession,
     deleteSession,
