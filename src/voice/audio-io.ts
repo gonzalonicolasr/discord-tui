@@ -109,6 +109,11 @@ export interface AudioPlayback {
   dropped(): number;
 }
 
+/** Si la escritura devuelve una promesa (FileSink de Bun), sus rechazos (EPIPE) se tragan acá. */
+function quiet(result: unknown): void {
+  if (result && typeof (result as Promise<unknown>).then === "function") (result as Promise<unknown>).catch(() => {});
+}
+
 export async function startPlayback(opts?: {
   target?: string;
   spawn?: SpawnLike;
@@ -134,6 +139,10 @@ export async function startPlayback(opts?: {
   const queue: Uint8Array[] = [];
   let droppedCount = 0;
   let pumping = false;
+  let closed = false;
+  // Si pw-cat ya salió (se cambia cada tanto por el reloj, o se cerró la salida), write/flush/end fallan con
+  // EPIPE de forma asíncrona: sin esto el rechazo queda suelto y OpenTUI abre su consola con el error.
+  proc.exited.then(() => (closed = true), () => (closed = true));
 
   // El drenaje corre en el próximo tick, imitando que `pw-cat` consume a su propio ritmo:
   // si entran frames más rápido de lo que se vacía la cola, se descarta el más viejo.
@@ -142,11 +151,15 @@ export async function startPlayback(opts?: {
     pumping = true;
     queueMicrotask(() => {
       pumping = false;
+      if (closed) {
+        queue.length = 0;
+        return;
+      }
       const frame = queue.shift();
       if (frame) {
         try {
-          proc.stdin?.write(frame);
-          proc.stdin?.flush?.();
+          quiet(proc.stdin?.write(frame));
+          quiet(proc.stdin?.flush?.());
         } catch {
           // pw-cat ya no está
         }
@@ -157,6 +170,7 @@ export async function startPlayback(opts?: {
 
   return {
     write(pcm: Uint8Array): void {
+      if (closed) return;
       if (queue.length >= maxQueued) {
         queue.shift();
         droppedCount += 1;
@@ -169,8 +183,10 @@ export async function startPlayback(opts?: {
     },
     async stop(): Promise<void> {
       // pw-cat ignora SIGTERM mientras tiene la entrada abierta: se cierra stdin y, si no sale, SIGKILL.
+      closed = true;
+      queue.length = 0;
       try {
-        proc.stdin?.end?.();
+        quiet(proc.stdin?.end?.());
       } catch {
         // ya cerrado
       }

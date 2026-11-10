@@ -136,6 +136,31 @@ describe("startCapture", () => {
 });
 
 describe("startPlayback", () => {
+  test("a pw-cat that died (EPIPE) never leaves an unhandled rejection, and nothing is written after it exits", async () => {
+    let exit: (code: number) => void = () => {};
+    const writes: Uint8Array[] = [];
+    const epipe = () => Promise.reject(Object.assign(new Error("EPIPE: broken pipe, write"), { code: "EPIPE" }));
+    const spawn: SpawnLike = () => ({
+      stdin: { write: (chunk: Uint8Array) => (writes.push(chunk), epipe()), flush: epipe, end: epipe },
+      stdout: null,
+      stderr: null,
+      exited: new Promise<number>((resolve) => (exit = resolve)),
+      killed: false,
+      kill: () => exit(0),
+    });
+    const playback = await startPlayback({ spawn });
+    playback.write(new Uint8Array(FRAME_BYTES));
+    await Bun.sleep(5);
+    expect(writes).toHaveLength(1);
+    exit(1); // pw-cat se cerró (cambio de salida / recambio por el reloj)
+    await Bun.sleep(5);
+    playback.write(new Uint8Array(FRAME_BYTES));
+    await Bun.sleep(5);
+    expect(writes).toHaveLength(1);
+    await playback.stop();
+    await Bun.sleep(5);
+  });
+
   test("spawns pw-cat with the exact args", async () => {
     const fake = fakeSpawn();
     const playback = await startPlayback({ spawn: fake.spawn });
