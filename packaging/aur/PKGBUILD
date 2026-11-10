@@ -1,0 +1,48 @@
+# Maintainer: Gonzalo Rocca <gonn.nicolas@gmail.com>
+# zcord: Discord en tu terminal. Paquete -git: compila la última versión de main.
+pkgname=zcord-git
+pkgver=r0.0000000
+pkgrel=1
+pkgdesc="Discord en tu terminal: chat, voz con E2EE, pantalla compartida y transmisiones (TUI)"
+arch=('x86_64')
+url="https://zcord.gonzalorocca.com"
+license=('LicenseRef-unknown')
+depends=('bun' 'pipewire')
+makedepends=('git')
+optdepends=(
+  'wl-clipboard: pegar capturas y copiar texto'
+  'ffmpeg: compartir pantalla'
+  'wf-recorder: compartir pantalla (más liviano que ffmpeg)'
+  'libnotify: notificaciones de escritorio'
+  'ghostty: terminal con protocolo Kitty (o kitty)'
+)
+provides=('zcord')
+conflicts=('zcord')
+# Hay binarios nativos ya compilados en node_modules (audio, video, imágenes): no tocarlos.
+options=('!strip' '!debug')
+source=("zcord::git+https://github.com/gonzalonicolasr/discord-tui.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd zcord
+  printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+}
+
+build() {
+  cd zcord
+  bun install --frozen-lockfile
+  bun scripts/build.ts
+  # Para correr no hacen falta las dependencias de desarrollo (typescript y compañía).
+  rm -rf node_modules
+  bun install --frozen-lockfile --production
+}
+
+package() {
+  cd zcord
+  install -d "$pkgdir/usr/lib/zcord"
+  cp -a bin dist node_modules src scripts package.json bunfig.toml "$pkgdir/usr/lib/zcord/"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/zcord/README.md"
+  install -Dm644 docs/themes.md "$pkgdir/usr/share/doc/zcord/themes.md"
+  install -d "$pkgdir/usr/bin"
+  ln -s /usr/lib/zcord/bin/zcord "$pkgdir/usr/bin/zcord"
+}

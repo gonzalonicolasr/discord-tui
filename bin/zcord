@@ -2,11 +2,31 @@
 # zcord: Discord en tu terminal. Lanzador para usar desde cualquier carpeta.
 # Corre la versión compilada (dist/, sin Babel en ejecución: menos memoria y arranque más rápido) y la recompila
 # si cambió el código. ZCORD_DEV=1 corre directo desde src/ (con el preload de bunfig.toml).
+# `zcord update` trae la última versión.
 set -euo pipefail
 here="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 # Bun puede estar fuera del PATH si lo instaló install.sh (queda en ~/.bun/bin).
 command -v bun >/dev/null 2>&1 || export PATH="$HOME/.bun/bin:$PATH"
 cd "$here"
+if [ "${1:-}" = update ]; then
+  # Instalado desde el código (install.sh o git clone): trae lo último y recompila. Como paquete del sistema
+  # (AUR, en /usr/lib/zcord, sin .git) lo actualiza el gestor de paquetes.
+  if [ ! -d .git ] || [ ! -w . ]; then
+    echo "zcord está instalado como paquete del sistema: actualizalo con tu gestor (por ejemplo: yay -Syu zcord-git)." >&2
+    exit 1
+  fi
+  before="$(git rev-parse --short HEAD)"
+  git pull --ff-only --quiet
+  after="$(git rev-parse --short HEAD)"
+  if [ "$before" = "$after" ]; then
+    echo "zcord ya está en lo último ($after)."
+  else
+    bun install --frozen-lockfile >/dev/null
+    bun scripts/build.ts >/dev/null
+    echo "✓ zcord actualizado: $before → $after"
+  fi
+  exit 0
+fi
 if [ "${ZCORD_DEV:-}" = 1 ]; then
   case "${1:-}" in
     demo) shift; exec bun scripts/demo.tsx "$@" ;;
