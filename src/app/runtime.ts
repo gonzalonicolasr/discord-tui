@@ -7,6 +7,7 @@ import { createGateway } from "../gateway/connection";
 import { createHttp } from "../rest/http";
 import { createRestClient } from "../rest/client";
 import { log } from "../log/logger";
+import { scheduleUpdateCheck } from "./update-check";
 import { imageCache } from "../images/cache";
 import { frameCache } from "../images/frames";
 import { avatarLoader } from "../images/avatar";
@@ -28,6 +29,8 @@ import { attachVoiceSounds, peerCue } from "../sounds/events";
 import { createSoundPlayer, type SoundPlayer } from "../sounds/player";
 
 export interface RuntimeDeps {
+  /** false: no buscar versión nueva en GitHub (tests). */
+  checkUpdates?: boolean;
   session: Session;
   me: { id: string; username: string };
   props: ClientProps;
@@ -201,6 +204,21 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     });
     notifyUnauthorized();
   });
+
+  // ¿Versión nueva en GitHub? Un rato después de arrancar, sin apurar la conexión. Se instala sola al próximo inicio.
+  if (deps.checkUpdates !== false) {
+    const updateTimer = setTimeout(() => {
+      void scheduleUpdateCheck((behind) =>
+        store.dispatch({
+          type: "notice/push",
+          key: "update-available",
+          level: "warn",
+          text: `Hay una versión nueva de zcord (${behind} cambio${behind === 1 ? "" : "s"}): se instala sola la próxima vez que lo abras.`,
+        }),
+      );
+    }, 15_000);
+    (updateTimer as { unref?: () => void }).unref?.();
+  }
 
   const noticeSweep = setInterval(() => {
     const now = Date.now();
