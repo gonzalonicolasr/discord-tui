@@ -242,12 +242,16 @@ export interface VoiceParticipant {
   me: boolean;
   /** Está transmitiendo pantalla (Go Live): `self_stream` de su VOICE_STATE_UPDATE, o el stream propio en vivo. */
   streaming: boolean;
+  /** Está mirando tu transmisión. */
+  watchingMe: boolean;
 }
 
 /** Participantes de un canal de voz, con quién habla (uno mismo incluido). */
 export function selectVoiceParticipants(state: AppState, guildId: string, channelId: string): VoiceParticipant[] {
   const states = state.voice.states[guildId] ?? {};
   const meId = state.me?.id ?? null;
+  const live = state.voice.stream.status === "live" && state.voice.channelId === channelId;
+  const viewers = new Set(live ? state.voice.stream.viewerIds ?? [] : []);
   return Object.entries(states)
     .filter(([, voice]) => voice.channelId === channelId)
     .map(([userId, voice]) => {
@@ -259,6 +263,7 @@ export function selectVoiceParticipants(state: AppState, guildId: string, channe
         muted: voice.selfMute || voice.mute,
         deafened: voice.selfDeaf || voice.deaf,
         streaming: voice.selfStream || (me && state.voice.channelId === channelId && state.voice.stream.status === "live"),
+        watchingMe: viewers.has(userId),
       };
     })
     .sort((a, b) => compareSnowflakes(a.userId, b.userId));

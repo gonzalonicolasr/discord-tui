@@ -216,6 +216,9 @@ test("viewers come from STREAM_CREATE / STREAM_UPDATE viewer_ids", async () => {
   expect(s.stream().viewers).toBe(0);
   s.gw.dispatch("STREAM_UPDATE", { stream_key: KEY, viewer_ids: ["1", "2"], paused: false });
   expect(s.stream().viewers).toBe(2);
+  expect(s.stream().viewerIds).toEqual(["1", "2"]);
+  s.gw.dispatch("STREAM_UPDATE", { stream_key: KEY, viewer_ids: [ME, "3"], paused: false });
+  expect(s.stream().viewerIds).toEqual(["3"]); // uno mismo no cuenta
 });
 
 test("the voice session id is dropped when you leave and replaced on rejoin", async () => {

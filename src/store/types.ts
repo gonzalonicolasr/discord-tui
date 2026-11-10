@@ -185,6 +185,8 @@ export interface StreamState {
   error: string | null;
   /** Cuántos miran (de STREAM_CREATE/STREAM_UPDATE `viewer_ids`), si Discord lo mandó. */
   viewers?: number;
+  /** Quiénes miran (los `viewer_ids`, sin uno mismo). */
+  viewerIds?: string[];
 }
 
 export type WatchStatus = "idle" | "connecting" | "watching" | "error";

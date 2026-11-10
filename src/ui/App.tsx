@@ -543,6 +543,10 @@ export function App(props: {
     props.actions.focus("messages");
   }
 
+  /** Segunda v dentro de este tiempo: recién ahí se sale de la llamada. */
+  const LEAVE_CONFIRM_MS = 2000;
+  let lastLeaveV = 0;
+
   function closeComposer(): void {
     setReplyTo(null);
     setEditing(null);
@@ -1127,6 +1131,18 @@ export function App(props: {
         case "v": {
           const id = channelId();
           const state = props.store.getState();
+          // Estando en una llamada, v te saca (o te cambia de canal): pide una segunda v para no cortar
+          // la llamada ni la transmisión por una tecla suelta.
+          if (state.voice.channelId !== null) {
+            const now = Date.now();
+            if (now - lastLeaveV > LEAVE_CONFIRM_MS) {
+              lastLeaveV = now;
+              const switching = id !== null && state.channels[id]?.type === 2 && id !== state.voice.channelId;
+              flash(switching ? "apretá v otra vez para cambiarte a este canal de voz" : "apretá v otra vez para salir de la llamada");
+              return;
+            }
+            lastLeaveV = 0;
+          }
           if (id !== null && state.channels[id]?.type === 2) void props.actions.voice?.toggleVoice(id);
           else if (state.voice.channelId !== null) void props.actions.voice?.leaveVoice();
           else flash("seleccioná un canal 🔊 para entrar a voz");

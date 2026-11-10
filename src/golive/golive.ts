@@ -87,7 +87,7 @@ export function createGoLive(deps: {
     a.shim?.destroy(); // op 19 si llegó a mandar el op 18
     a.shim = null;
     a.conn = null;
-    setStream({ status: error ? "error" : "idle", error, viewers: undefined });
+    setStream({ status: error ? "error" : "idle", error, viewers: undefined, viewerIds: undefined });
     if (error) {
       log.warn("golive.stopped", { state: "error", msg: error.slice(0, 120) });
       notice(error);
@@ -161,7 +161,7 @@ export function createGoLive(deps: {
       conn: null,
     };
     active = a;
-    setStream({ status: "starting", monitor: monitorArg ?? null, error: null, viewers: undefined });
+    setStream({ status: "starting", monitor: monitorArg ?? null, error: null, viewers: undefined, viewerIds: undefined });
     const monitor = monitorArg ?? (await defaultMonitor(state.settings.streamMonitor));
     if (active !== a) return;
     if (monitor) setStream({ monitor });
@@ -220,8 +220,10 @@ export function createGoLive(deps: {
     return (monitors.find((m) => m.focused) ?? monitors[0])?.name ?? "";
   }
 
-  function viewersOf(d: any): number | undefined {
-    return Array.isArray(d?.viewer_ids) ? d.viewer_ids.length : undefined;
+  function viewersOf(d: any): string[] | undefined {
+    if (!Array.isArray(d?.viewer_ids)) return undefined;
+    const me = meId();
+    return d.viewer_ids.filter((id: unknown): id is string => typeof id === "string" && id !== me);
   }
 
   gateway.on("dispatch", (t, d) => {
@@ -233,8 +235,8 @@ export function createGoLive(deps: {
     }
     if (!t.startsWith("STREAM_") || !active || d?.stream_key !== active.key) return;
     if (t === "STREAM_CREATE" || t === "STREAM_UPDATE") {
-      const viewers = viewersOf(d);
-      if (viewers !== undefined) setStream({ viewers });
+      const viewerIds = viewersOf(d);
+      if (viewerIds !== undefined) setStream({ viewers: viewerIds.length, viewerIds });
     } else if (t === "STREAM_DELETE") {
       log.info("golive.deleted", { state: typeof d?.reason === "string" ? d.reason.slice(0, 40) : "none" });
       void finish(active, streamDeleteMessage(d?.reason));

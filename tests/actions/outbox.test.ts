@@ -195,3 +195,17 @@ test("different sends upload their own attachments", async () => {
 
   expect(uploads).toBe(2);
 });
+
+test("a 403 Missing Permissions says it plainly instead of 'HTTP 403'", async () => {
+  const fake = startFakeHttp(() => Response.json({ code: 50013, message: "Missing Permissions" }, { status: 403 }));
+  const http = createHttp({ props: createClientProps({ buildNumber: 1 }), baseUrl: fake.url });
+  const rest = createRestClient({ http, onUnauthorized: () => {} });
+  const store = createStore(emptyState());
+  const actions = createActions({ store, rest, gateway: gateway as never });
+  await actions.send(CH, "hola");
+  await Bun.sleep(50);
+  const items = selectOutbox(store.getState(), CH);
+  expect(items[0]!.state).toBe("failed");
+  expect(items[0]!.error).toBe("no tenés permiso para escribir acá");
+  fake.stop();
+});

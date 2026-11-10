@@ -89,14 +89,32 @@ test("v on a selected voice channel toggles voice; Enter only opens its chat", a
   expect(s.calls).toEqual([`toggle:${DEMO.voice}`]);
 });
 
-test("v on a text channel while connected leaves voice", async () => {
+test("v while connected asks for a second v before leaving (a stray key does not cut the call)", async () => {
   const s = setup();
   s.store.dispatch({ type: "voice/joining", guildId: DEMO.guild, channelId: DEMO.voice });
+  const { mockInput, renderOnce, captureCharFrame } = await render(s);
+  await renderOnce();
+  mockInput.pressKey("v");
+  await renderOnce();
+  expect(s.calls).toEqual([]);
+  expect(captureCharFrame()).toContain("apretá v otra vez para salir de la llamada");
+  mockInput.pressKey("v");
+  await renderOnce();
+  expect(s.calls).toEqual(["leave"]);
+});
+
+test("on the voice channel you are in, v also needs a second press to leave", async () => {
+  const s = setup();
+  s.store.dispatch({ type: "voice/joining", guildId: DEMO.guild, channelId: DEMO.voice });
+  s.store.dispatch({ type: "ui/selectChannel", id: DEMO.voice });
   const { mockInput, renderOnce } = await render(s);
   await renderOnce();
   mockInput.pressKey("v");
   await renderOnce();
-  expect(s.calls).toEqual(["leave"]);
+  expect(s.calls).toEqual([]);
+  mockInput.pressKey("v");
+  await renderOnce();
+  expect(s.calls).toEqual([`toggle:${DEMO.voice}`]);
 });
 
 test("m, D and M dispatch mute, deafen and input mode", async () => {

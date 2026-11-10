@@ -29,11 +29,12 @@ export function demoStreamActions(store: Store, me: string): Pick<VoiceActions, 
       }
       if (v.stream.status === "live" || v.stream.status === "starting") return;
       const chosen = monitor ?? store.getState().settings.streamMonitor ?? DEMO_MONITORS[0]!.name;
-      store.dispatch({ type: "voice/stream", patch: { status: "starting", monitor: chosen, error: null, viewers: undefined } });
+      store.dispatch({ type: "voice/stream", patch: { status: "starting", monitor: chosen, error: null, viewers: undefined, viewerIds: undefined } });
       timer = setTimeout(() => {
         timer = null;
         if (store.getState().voice.stream.status !== "starting") return;
-        store.dispatch({ type: "voice/stream", patch: { status: "live", viewers: 1 } });
+        // En la demo te mira Ramiro (como STREAM_UPDATE con viewer_ids).
+        store.dispatch({ type: "voice/stream", patch: { status: "live", viewers: 1, viewerIds: ["900000000000000101"] } });
         selfStream(true);
       }, 600);
     },
@@ -41,7 +42,7 @@ export function demoStreamActions(store: Store, me: string): Pick<VoiceActions, 
       if (timer) clearTimeout(timer);
       timer = null;
       if (store.getState().voice.stream.status === "idle") return;
-      store.dispatch({ type: "voice/stream", patch: { status: "idle", error: null, viewers: undefined } });
+      store.dispatch({ type: "voice/stream", patch: { status: "idle", error: null, viewers: undefined, viewerIds: undefined } });
       selfStream(false);
     },
     async toggleStream() {

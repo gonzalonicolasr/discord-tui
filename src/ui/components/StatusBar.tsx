@@ -108,6 +108,16 @@ export function VoiceBar(props: {
     const names = ids.slice(0, 3).map((id) => displayName(state(), id, voice().guildId));
     return `hablando: ${names.join(", ")}${ids.length > 3 ? ` +${ids.length - 3}` : ""}`;
   };
+  /** Quién mira tu transmisión: "👁 Ramiro, Celes" (hasta 3 nombres) o la cuenta si Discord no mandó la lista. */
+  const viewersText = (): string => {
+    const stream = voice().stream;
+    if (stream.status !== "live") return "";
+    const ids = stream.viewerIds;
+    if (!ids) return stream.viewers !== undefined ? ` · 👁 ${stream.viewers}` : "";
+    if (ids.length === 0) return " · 👁 nadie todavía";
+    const names = ids.slice(0, 3).map((id) => displayName(state(), id, voice().guildId));
+    return ` · 👁 ${names.join(", ")}${ids.length > 3 ? ` +${ids.length - 3}` : ""}`;
+  };
   const statusText = (): string => {
     const s = voice().status;
     if (s === "joining") return "conectando…";
@@ -142,9 +152,7 @@ export function VoiceBar(props: {
           <text fg={props.theme.speaking} wrapMode="none">{speakingNames() ? ` · ${speakingNames()}` : ""}</text>
           <text fg={props.theme.warn} wrapMode="none">{voice().pttWarning ? ` · ${voice().pttWarning}` : ""}</text>
           <text fg={props.theme.warn} wrapMode="none">{voice().micError ? ` · sin mic: ${voice().micError}` : ""}</text>
-          <text fg={props.theme.dim} wrapMode="none">
-            {voice().stream.status === "live" && voice().stream.viewers !== undefined ? ` · 👁 ${voice().stream.viewers}` : ""}
-          </text>
+          <text fg={props.theme.accent} wrapMode="none">{viewersText()}</text>
           {/* Se achica antes que el resto de la barra (el nombre del canal y E2EE no se cortan). */}
           <text fg={props.theme.error} wrapMode="none" flexShrink={50}>
             {voice().stream.status === "error" && voice().stream.error ? ` · ✗ transmisión: ${voice().stream.error}` : ""}

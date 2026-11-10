@@ -38,6 +38,8 @@ interface ParticipantView {
   deafened: boolean;
   me: boolean;
   streaming: boolean;
+  /** Está mirando tu transmisión. */
+  watchingMe: boolean;
   volume: number;
   /** null = avatares apagados (setting `showAvatars`). */
   avatar: string | null;
@@ -270,7 +272,7 @@ export function ChannelList(props: {
                           {(() => {
                             // Íconos compactos como Discord: 🔇 mic apagado, 🙉 ensordecido, 📺 transmitiendo.
                             const badges = (): string =>
-                              `${p.volume !== 100 ? ` ${p.volume}%` : ""}${p.streaming ? " 📺" : ""}${p.deafened ? " 🙉" : p.muted ? " 🔇" : ""}`;
+                              `${p.volume !== 100 ? ` ${p.volume}%` : ""}${p.watchingMe ? " 👁" : ""}${p.streaming ? " 📺" : ""}${p.deafened ? " 🙉" : p.muted ? " 🔇" : ""}`;
                             const room = (): number =>
                               Math.max(4, inner - row.depth * 2 - 5 - (p.avatar !== null ? AVATAR_COLS + 1 : 0) - cellWidth(badges()));
                             return (
@@ -285,6 +287,9 @@ export function ChannelList(props: {
                                 {/* Un <text> vacío igual ocupa una celda: solo se montan los que tienen algo. */}
                                 <Show when={p.volume !== 100}>
                                   <text fg={props.theme.accent} wrapMode="none" flexShrink={0}>{` ${p.volume}%`}</text>
+                                </Show>
+                                <Show when={p.watchingMe}>
+                                  <text fg={props.theme.accent} wrapMode="none" flexShrink={0}>{" 👁"}</text>
                                 </Show>
                                 <Show when={p.streaming}>
                                   <text fg={props.theme.error} wrapMode="none" flexShrink={0}>{" 📺"}</text>

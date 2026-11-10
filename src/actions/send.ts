@@ -13,6 +13,8 @@ export interface SendDeps {
 }
 
 function errorText(error: unknown): string {
+  // 50013 Missing Permissions / 50001 Missing Access: el canal no te deja escribir (o ya no lo ves).
+  if (error instanceof HttpError && (error.code === 50013 || error.code === 50001)) return "no tenés permiso para escribir acá";
   if (error instanceof HttpError) return `HTTP ${error.status}`;
   if (error instanceof Error) return error.message;
   return "error";

@@ -80,7 +80,8 @@ test("click 📺 transmitir → monitor picker → ⏳ iniciando… → 🔴 EN 
   await h.renderOnce();
   const live = h.captureCharFrame();
   expect(live).toContain("🔴 EN VIVO · detener");
-  expect(live).toContain("👁 1");
+  expect(live).toContain("👁 Ramiro"); // quién te mira, por nombre
+  expect(live).toMatch(/Ramiro\s+👁/); // y el 👁 al lado de Ramiro en la lista de la llamada
   expect(live).toMatch(/○ G  Gon\s+📺/);
   await click(h, "🔴 EN VIVO · detener");
   expect(s.calls).toEqual(["start:HDMI-A-1", "stop"]);
