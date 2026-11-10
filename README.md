@@ -64,7 +64,9 @@ zcord
   celular, `t` permite entrar con el token.
 - **`zcord demo`** muestra la interfaz con datos de prueba, sin loguearte.
 - **El instalador** baja zcord a `~/.local/share/zcord`, trae [Bun](https://bun.sh) si falta y deja `zcord` en
-  `~/.local/bin`. Correrlo de nuevo actualiza. Para desinstalar: `rm -rf ~/.local/share/zcord ~/.local/bin/zcord`.
+  `~/.local/bin`. **`zcord update`** trae la última versión. Para desinstalar: `rm -rf ~/.local/share/zcord ~/.local/bin/zcord`.
+- **Arch / Omarchy:** también está como paquete del AUR, `yay -S zcord-git`, y se actualiza con el resto del
+  sistema (`yay -Syu`). El `PKGBUILD` vive en `packaging/aur/`.
 - **Requisitos:** Linux con PipeWire y Wayland, y una terminal con protocolo Kitty (Ghostty o Kitty). Opcionales:
   `wl-clipboard` (pegar y copiar), `ffmpeg` o `wf-recorder` (pantalla compartida).
 - **Desde el código:** `git clone https://github.com/gonzalonicolasr/discord-tui && cd discord-tui && bun install && bin/zcord`.

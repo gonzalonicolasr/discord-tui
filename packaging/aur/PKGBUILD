@@ -35,6 +35,8 @@ build() {
   # Para correr no hacen falta las dependencias de desarrollo (typescript y compañía).
   rm -rf node_modules
   bun install --frozen-lockfile --production
+  # Objetos intermedios de compilar módulos nativos: no se usan en ejecución.
+  find node_modules -type d -name 'build-tmp*' -prune -exec rm -rf {} +
 }
 
 package() {

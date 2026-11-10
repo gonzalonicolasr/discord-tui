@@ -1,0 +1,23 @@
+pkgbase = zcord-git
+	pkgdesc = Discord en tu terminal: chat, voz con E2EE, pantalla compartida y transmisiones (TUI)
+	pkgver = r0.0000000
+	pkgrel = 1
+	url = https://zcord.gonzalorocca.com
+	arch = x86_64
+	license = LicenseRef-unknown
+	makedepends = git
+	depends = bun
+	depends = pipewire
+	optdepends = wl-clipboard: pegar capturas y copiar texto
+	optdepends = ffmpeg: compartir pantalla
+	optdepends = wf-recorder: compartir pantalla (más liviano que ffmpeg)
+	optdepends = libnotify: notificaciones de escritorio
+	optdepends = ghostty: terminal con protocolo Kitty (o kitty)
+	provides = zcord
+	conflicts = zcord
+	options = !strip
+	options = !debug
+	source = zcord::git+https://github.com/gonzalonicolasr/discord-tui.git
+	sha256sums = SKIP
+
+pkgname = zcord-git
