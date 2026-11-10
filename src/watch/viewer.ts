@@ -175,9 +175,15 @@ export function createViewerConnection(lib: ViewerLib, p: ViewerParams, events: 
    * cada 3 s. [sin verificar]
    */
   let lastWants = 0;
+  /** Último keyframe recibido (al conectar cuenta como reciente: se espera el primero un rato). */
+  let lastKeyframeAt = Date.now();
+  const WANTS_AFTER_MS = 4000;
   function refreshWants(): void {
     const video = ssrcs.video;
     if (!conn || !video || stopped || Date.now() - lastWants < 3000) return;
+    // Cortar y volver a pedir el video lo pausa un instante (se ve como un parpadeo): solo si el PLI no alcanzó,
+    // o sea si hace rato que no llega ningún keyframe.
+    if (Date.now() - lastKeyframeAt < WANTS_AFTER_MS) return;
     lastWants = Date.now();
     diag.wants++;
     try {
@@ -216,7 +222,10 @@ export function createViewerConnection(lib: ViewerLib, p: ViewerParams, events: 
       return;
     }
     diag.rtpVideo++;
-    for (const au of depack.push(pkt)) {
+    const keyframesBefore = depack.keyframes;
+    const aus = depack.push(pkt);
+    if (depack.keyframes !== keyframesBefore) lastKeyframeAt = Date.now();
+    for (const au of aus) {
       const plain = decrypt(au);
       if (!plain) continue;
       stats.frames++;
