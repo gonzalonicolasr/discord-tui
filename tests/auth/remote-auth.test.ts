@@ -56,6 +56,9 @@ async function startHarness(
 
   const fake = startFakeRemoteAuth(script);
   const http = startFakeHttp(async (req) => {
+    if (new URL(req.url).pathname.endsWith("/experiments")) {
+      return Response.json({ fingerprint: "1234567890.fp-falso" }, { headers: { "Set-Cookie": "__dcfduid=galleta; Path=/; HttpOnly" } });
+    }
     if (httpHandler) return httpHandler(req);
     return Response.json({ encrypted_token: await encryptFor(latest.publicSpkiB64, fakeToken()) });
   });
@@ -156,6 +159,20 @@ test("missing heartbeat_ack reconnects", async () => {
   const h = await startHarness({ noHeartbeatAck: true, heartbeatInterval: 50, stallAfterQr: true });
   try {
     await waitFor(() => h.fake.connections >= 2, 4000);
+  } finally {
+    h.stop();
+  }
+});
+
+test("like the web client: fingerprint + Discord's cookies go with the ticket exchange (fewer captchas)", async () => {
+  const h = await startHarness();
+  try {
+    await waitFor(() => h.events.some((event) => event.type === "token"));
+    const paths = h.http.requests.map((r) => `${r.method} ${new URL(r.url).pathname}`);
+    expect(paths).toEqual(["GET /experiments", "POST /users/@me/remote-auth/login"]);
+    const login = h.http.requests[1]!;
+    expect(login.headers.get("x-fingerprint")).toBe("1234567890.fp-falso");
+    expect(login.headers.get("cookie")).toBe("__dcfduid=galleta");
   } finally {
     h.stop();
   }

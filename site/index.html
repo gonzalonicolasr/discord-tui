@@ -142,11 +142,10 @@
 
   <section class="box install" aria-labelledby="t-install">
     <span class="t" id="t-install">probalo</span>
-<pre id="cmd"><span class="ps">$ </span>git clone https://github.com/gonzalonicolasr/discord-tui
-<span class="ps">$ </span>cd discord-tui &amp;&amp; bun install
-<span class="ps">$ </span>bin/zcord demo</pre>
-    <p class="note"><code>bin/zcord demo</code> abre la interfaz con datos de prueba, sin loguearte. <code>bin/zcord</code> entra con tu cuenta (QR la primera vez).</p>
-    <p class="note">Linux con Wayland y PipeWire, <a href="https://bun.sh">Bun</a> y Ghostty o Kitty.</p>
+<pre id="cmd"><span class="ps">$ </span>curl -fsSL https://zcord.gonzalorocca.com/install.sh | bash
+<span class="ps">$ </span>zcord</pre>
+    <p class="note">La primera vez te muestra un QR: lo escaneás con la app de Discord del celular (tu perfil → ⚙ Configuración → Escanear código QR) y listo, quedás adentro. ¿Solo querés mirar? <code>zcord demo</code>, sin loguearte.</p>
+    <p class="note">Linux con Wayland y PipeWire, en Ghostty o Kitty. El instalador trae <a href="https://bun.sh">Bun</a> si no lo tenés; correrlo de nuevo actualiza.</p>
     <button class="copy" id="copy" type="button" aria-describedby="t-install">[ copiar ]</button>
   </section>
 
@@ -203,7 +202,7 @@
   if (matchMedia("(prefers-reduced-motion: reduce)").matches) typed.textContent = text;
   else [...text].forEach((ch, i) => setTimeout(() => (typed.textContent += ch), 350 + i * 70));
 
-  const cmd = "git clone https://github.com/gonzalonicolasr/discord-tui\ncd discord-tui && bun install\nbin/zcord demo";
+  const cmd = "curl -fsSL https://zcord.gonzalorocca.com/install.sh | bash";
   const btn = document.getElementById("copy");
   async function copy() {
     try {

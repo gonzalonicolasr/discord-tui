@@ -54,20 +54,21 @@ zcord usa **unas 3,7 veces menos memoria** que la app oficial de Discord, aun es
 
 ## Cómo correrlo
 
-Requisitos:
-- Linux con PipeWire y Wayland.
-- [Bun](https://bun.sh) ≥ 1.3.14.
-- Una terminal con protocolo Kitty: Ghostty o Kitty.
-- Opcionales: `wl-clipboard` (pegar), `wf-recorder` o `ffmpeg` (pantalla compartida).
-
 ```sh
-bun install
-bin/zcord          # la app compilada; se recompila sola si cambió el código (login con QR la primera vez)
-bin/zcord demo     # la UI con datos falsos, sin conectarse a Discord
+curl -fsSL https://zcord.gonzalorocca.com/install.sh | bash
+zcord
 ```
 
-Para tenerlo en el PATH: `ln -s ~/projects/discord-tui/bin/zcord ~/.local/bin/zcord`. Dentro de la app, `?` muestra
-todas las teclas.
+- **Login:** la primera vez zcord muestra un QR. Lo escaneás con la app de Discord del celular (tu perfil →
+  ⚙ Configuración → Escanear código QR) y listo. Si Discord pide un captcha, `r` genera un QR nuevo; sin
+  celular, `t` permite entrar con el token.
+- **`zcord demo`** muestra la interfaz con datos de prueba, sin loguearte.
+- **El instalador** baja zcord a `~/.local/share/zcord`, trae [Bun](https://bun.sh) si falta y deja `zcord` en
+  `~/.local/bin`. Correrlo de nuevo actualiza. Para desinstalar: `rm -rf ~/.local/share/zcord ~/.local/bin/zcord`.
+- **Requisitos:** Linux con PipeWire y Wayland, y una terminal con protocolo Kitty (Ghostty o Kitty). Opcionales:
+  `wl-clipboard` (pegar y copiar), `ffmpeg` o `wf-recorder` (pantalla compartida).
+- **Desde el código:** `git clone https://github.com/gonzalonicolasr/discord-tui && cd discord-tui && bun install && bin/zcord`.
+  Dentro de la app, `?` muestra todas las teclas.
 
 > ⚠️ zcord entra con tu cuenta personal (no es un bot). Eso va contra los Términos de Discord y la cuenta puede
 > terminar suspendida. Usalo sabiendo ese riesgo.

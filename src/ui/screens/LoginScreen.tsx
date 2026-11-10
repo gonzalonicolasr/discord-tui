@@ -9,7 +9,7 @@ import { THEMES } from "../theme";
 registerQRCode();
 
 export interface LoginScreenProps {
-  auth: { on(fn: (event: RaEvent) => void): () => void; start(): void };
+  auth: { on(fn: (event: RaEvent) => void): () => void; start(): void; stop?(): void };
   onPasteToken(raw: string): Promise<string | null>;
 }
 
@@ -19,6 +19,9 @@ export function LoginScreen(props: LoginScreenProps): JSX.Element {
   const [captcha, setCaptcha] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
   const [pastedChars, setPastedChars] = createSignal(0);
+  /** Lo del token queda escondido: la forma normal de entrar es el QR. */
+  const [tokenMode, setTokenMode] = createSignal(false);
+  const showToken = (): boolean => tokenMode() || pastedChars() > 0;
 
   async function paste(raw: string): Promise<void> {
     setPastedChars(raw.length);
@@ -64,7 +67,18 @@ export function LoginScreen(props: LoginScreenProps): JSX.Element {
   });
 
   useKeyboard((key) => {
-    if (key.name === "p" && !key.ctrl && !key.meta) void pasteFromClipboard();
+    if (key.ctrl || key.meta) return;
+    if (key.name === "t") setTokenMode((on) => !on);
+    if (key.name === "r") {
+      // QR nuevo (después de un captcha o un error): se arranca de cero.
+      setCaptcha(false);
+      setError(null);
+      setUsername(null);
+      setQrUrl(null);
+      props.auth.stop?.();
+      props.auth.start();
+    }
+    if (key.name === "p" && showToken()) void pasteFromClipboard();
   });
 
   return (
@@ -73,23 +87,33 @@ export function LoginScreen(props: LoginScreenProps): JSX.Element {
         <ascii_font text={APP_NAME} font="block" color={THEMES.dark.brand.slice(0, 5)} />
         <text fg={THEMES.dark.header}>{`${APP_TAGLINE} · iniciá sesión con tu cuenta`}</text>
       </box>
-      <Show when={qrUrl()}>
-        <text>Escaneá el código con la app de Discord</text>
+      <Show when={qrUrl()} fallback={<text fg={THEMES.dark.dim}>preparando el código QR…</text>}>
+        <text fg={THEMES.dark.fg}>Escaneá el código con la app de Discord del celular:</text>
+        <text fg={THEMES.dark.dim}>tu perfil (abajo a la derecha) → ⚙ Configuración → Escanear código QR</text>
         <qr_code content={qrUrl()!} />
       </Show>
       <Show when={username()}>
-        <text>{`¿Sos vos, ${username()}? Confirmá en el teléfono`}</text>
+        <text fg={THEMES.dark.ok}>{`¿Sos vos, ${username()}? Confirmá en el teléfono`}</text>
       </Show>
       <Show when={captcha()}>
-        <text>Discord pidió captcha, pegá el token</text>
+        <text fg={THEMES.dark.warn}>Discord pidió un captcha y no se puede resolver acá. Apretá r para un QR nuevo y escanealo otra vez.</text>
       </Show>
-      <box flexDirection="column">
-        <text>Abrí Discord en el navegador y andá a DevTools → Network.</text>
-        <text>Filtrá requests a /api/v9 y recargá la página.</text>
-        <text>Copiá el header Authorization y pegá el valor acá con Ctrl+Shift+V.</text>
-        <text>Pegá tu token (p para pegar, se ve como ••••)</text>
-        <text>{"•".repeat(pastedChars())}</text>
-      </box>
+      <Show when={error()}>
+        <text fg={THEMES.dark.dim}>Apretá r para generar un QR nuevo.</text>
+      </Show>
+      <Show
+        when={showToken()}
+        fallback={<text fg={THEMES.dark.dim}>¿Sin celular a mano? Apretá t para entrar con tu token.</text>}
+      >
+        <box flexDirection="column">
+          <text fg={THEMES.dark.header}>Entrar con el token (t vuelve al QR)</text>
+          <text>Abrí Discord en el navegador y andá a DevTools → Network.</text>
+          <text>Filtrá requests a /api/v9 y recargá la página.</text>
+          <text>Copiá el header Authorization y pegá el valor acá con Ctrl+Shift+V.</text>
+          <text>Pegá tu token (p para pegar, se ve como ••••)</text>
+          <text>{"•".repeat(pastedChars())}</text>
+        </box>
+      </Show>
       <Show when={error()}>
         <text>{error()}</text>
       </Show>

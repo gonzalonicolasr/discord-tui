@@ -4,6 +4,8 @@
 # si cambió el código. ZCORD_DEV=1 corre directo desde src/ (con el preload de bunfig.toml).
 set -euo pipefail
 here="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+# Bun puede estar fuera del PATH si lo instaló install.sh (queda en ~/.bun/bin).
+command -v bun >/dev/null 2>&1 || export PATH="$HOME/.bun/bin:$PATH"
 cd "$here"
 if [ "${ZCORD_DEV:-}" = 1 ]; then
   case "${1:-}" in

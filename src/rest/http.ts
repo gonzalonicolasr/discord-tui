@@ -7,7 +7,7 @@ const DEFAULT_BASE_URL = "https://discord.com/api/v9";
 const SNOWFLAKE_SEGMENT = /\/\d{17,20}(?=\/|$)/g;
 
 export interface Http {
-  request<T>(method: string, path: string, body?: unknown): Promise<T>;
+  request<T>(method: string, path: string, body?: unknown, opts?: { headers?: Record<string, string> }): Promise<T>;
 }
 
 export interface HttpDeps {
@@ -35,9 +35,12 @@ function numericCode(body: Record<string, unknown> | null): number | undefined {
 export function createHttp(deps: HttpDeps): Http {
   const base = deps.baseUrl ?? DEFAULT_BASE_URL;
   const doFetch = deps.fetch ?? fetch;
+  // Cookies que pone Discord (__dcfduid, __cfruid…): el navegador las devuelve y sin ellas el login por QR cae
+  // más seguido en captcha. Solo viven en memoria y solo vuelven a Discord.
+  const cookies = new Map<string, string>();
 
   return {
-    async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+    async request<T>(method: string, path: string, body?: unknown, opts?: { headers?: Record<string, string> }): Promise<T> {
       const route = routeTemplate(path);
       const url = new URL(`${base.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`);
 
@@ -45,9 +48,12 @@ export function createHttp(deps: HttpDeps): Http {
       if (body !== undefined) headers["Content-Type"] = "application/json";
       // El token solo viaja a Discord; 127.0.0.1 es el servidor falso de los tests.
       const host = url.hostname;
-      if (deps.token && (host === "discord.com" || host === "127.0.0.1" || host === "localhost")) {
+      const discordHost = host === "discord.com" || host === "127.0.0.1" || host === "localhost";
+      if (deps.token && discordHost) {
         headers.Authorization = deps.token.reveal();
       }
+      if (discordHost && cookies.size > 0) headers.Cookie = [...cookies].map(([name, value]) => `${name}=${value}`).join("; ");
+      if (opts?.headers) Object.assign(headers, opts.headers);
 
       let response: Response;
       try {
@@ -62,6 +68,14 @@ export function createHttp(deps: HttpDeps): Http {
         if (error instanceof Error) fields.error_name = error.name;
         log.error("http.network", fields);
         throw new NetworkError(method, route, { cause: error });
+      }
+
+      if (discordHost) {
+        for (const line of response.headers.getSetCookie?.() ?? []) {
+          const pair = line.split(";", 1)[0]!;
+          const eq = pair.indexOf("=");
+          if (eq > 0) cookies.set(pair.slice(0, eq).trim(), pair.slice(eq + 1).trim());
+        }
       }
 
       const text = await response.text().catch(() => "");

@@ -7,6 +7,7 @@ stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT
 mkdir -p "$stage/img" "$stage/fonts"
 cp site/index.html "$stage/"
+cp install.sh "$stage/install.sh"
 cp site/fonts/*.woff2 "$stage/fonts/"
 cp docs/img/zcord.gif docs/img/og.png site/img/*.jpg "$stage/img/"
 ssh -o ConnectTimeout=5 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 minipc 'rm -rf /tmp/zcord-site && mkdir -p /tmp/zcord-site'

@@ -77,6 +77,16 @@ export function createRemoteAuth(deps: RemoteAuthDeps): RemoteAuth {
     }
   }
 
+  let fingerprintJob: Promise<string | null> = Promise.resolve(null);
+  async function fetchFingerprint(): Promise<string | null> {
+    try {
+      const response = await deps.http.request<Record<string, unknown>>("GET", "/experiments");
+      return typeof response?.fingerprint === "string" ? response.fingerprint : null;
+    } catch {
+      return null;
+    }
+  }
+
   function stop(): void {
     stopped = true;
     if (reconnectTimer !== null) {
@@ -200,10 +210,12 @@ export function createRemoteAuth(deps: RemoteAuthDeps): RemoteAuth {
     clearHeartbeat();
     if (keys === null || typeof message.ticket !== "string") return;
     try {
+      const fingerprint = await fingerprintJob;
       const response = await deps.http.request<Record<string, unknown>>(
         "POST",
         "/users/@me/remote-auth/login",
         { ticket: message.ticket },
+        fingerprint ? { headers: { "X-Fingerprint": fingerprint } } : undefined,
       );
       const encrypted = typeof response?.encrypted_token === "string" ? response.encrypted_token : null;
       if (encrypted === null) {
@@ -279,6 +291,9 @@ export function createRemoteAuth(deps: RemoteAuthDeps): RemoteAuth {
       if (socket !== null || reconnectTimer !== null) return;
       stopped = false;
       reconnects = 0;
+      // Como la web: un fingerprint (y las cookies que vienen con él) antes del login, para que Discord no
+      // trate el canje del ticket como sospechoso y pida captcha.
+      fingerprintJob = fetchFingerprint();
       void connect();
     },
     stop,
