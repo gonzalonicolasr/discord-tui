@@ -72,7 +72,8 @@ export function Composer(props: {
   theme: Theme;
   placeholder?: string;
   context?: string | null;
-  attachments?: PendingAttachment[];
+  /** Lo que se muestra con ✕: adjuntos nuevos o, al editar, los que ya tiene el mensaje. */
+  attachments?: Array<{ filename: string; bytes: { byteLength: number } }>;
   prompt?: string | null;
   onClick?(): void;
   /** Click dentro del texto: offset del texto donde poner el cursor. */

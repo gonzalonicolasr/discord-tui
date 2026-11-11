@@ -166,6 +166,9 @@ export function App(props: {
   const [mentions, setMentions] = createSignal<Record<string, PickedMention[]>>({});
   const [cursors, setCursors] = createSignal<Record<string, number>>({});
   const [attachments, setAttachments] = createSignal<Record<string, PendingAttachment[]>>({});
+  /** Al editar: los adjuntos que ya tiene el mensaje (se pueden sacar; null = no se está editando). */
+  const [editAttachments, setEditAttachments] = createSignal<Array<{ id: string; filename: string; size: number }> | null>(null);
+  const editAttachmentsChanged = { value: false };
   const [attachPrompt, setAttachPrompt] = createSignal<string | null>(null);
   const [mentionIndex, setMentionIndex] = createSignal(0);
   const [mentionClosed, setMentionClosed] = createSignal(false);
@@ -313,10 +316,28 @@ export function App(props: {
     replaceRange(currentCursor(), to, "");
   }
 
-  function addAttachment(file: PendingAttachment): void {
+  /** Saca un adjunto: al editar, de los que ya tiene el mensaje; si no, de los que vas a mandar. */
+  function removeAttachmentAt(index: number): void {
+    const editingList = editAttachments();
+    if (editingList !== null) {
+      setEditAttachments(editingList.filter((_, i) => i !== index));
+      editAttachmentsChanged.value = true;
+      return;
+    }
     const id = channelId();
-    if (id === null) return;
+    if (id !== null) setAttachments((previous) => ({ ...previous, [id]: (previous[id] ?? []).filter((_, i) => i !== index) }));
+  }
+
+  /** Suma un adjunto al mensaje que vas a mandar; false si no se pudo (al editar no se suman). */
+  function addAttachment(file: PendingAttachment): boolean {
+    const id = channelId();
+    if (id === null) return false;
+    if (editing() !== null) {
+      flash("al editar solo podés sacar adjuntos; para sumar uno, mandalo en un mensaje nuevo");
+      return false;
+    }
     setAttachments((previous) => ({ ...previous, [id]: [...(previous[id] ?? []), file] }));
+    return true;
   }
 
   const mentionState = () => {
@@ -550,6 +571,8 @@ export function App(props: {
   function closeComposer(): void {
     setReplyTo(null);
     setEditing(null);
+    setEditAttachments(null);
+    editAttachmentsChanged.value = false;
     setInsert(false);
     setMentionClosed(false);
   }
@@ -571,9 +594,11 @@ export function App(props: {
     if (id === null) return;
     const text = currentText();
     const files = currentAttachments();
-    const validation = validateOutgoing(text, files.length);
+    const kept = editAttachments();
+    const validation = validateOutgoing(text, editing() !== null ? kept?.length ?? 0 : files.length);
     if (!validation.ok) {
       if (validation.reason === "too_long") flash("el mensaje pasa de 2000 caracteres");
+      else if (editing() !== null) flash("el mensaje no puede quedar vacío; para borrarlo: Esc y dd");
       return;
     }
     const content = serializeComposer(text, currentMentions());
@@ -581,7 +606,7 @@ export function App(props: {
     if (editing() !== null) {
       const editId = editing()!;
       try {
-        await props.actions.edit(id, editId, content);
+        await props.actions.edit(id, editId, content, editAttachmentsChanged.value ? (kept ?? []).map((a) => a.id) : undefined);
       } catch {
         flash("no se pudo editar");
         return;
@@ -631,6 +656,13 @@ export function App(props: {
     }
     setEditing(selectedId());
     setReplyTo(null);
+    const existing = Array.isArray(message.attachments) ? message.attachments : [];
+    setEditAttachments(
+      existing
+        .filter((a: any) => typeof a?.id === "string")
+        .map((a: any) => ({ id: a.id, filename: String(a.filename ?? "archivo"), size: Number(a.size ?? 0) })),
+    );
+    editAttachmentsChanged.value = false;
     const guildId = props.store.getState().channels[id]?.guildId ?? null;
     const draft = composerFromContent(String(message.content ?? ""), (userId) => displayName(props.store.getState(), userId, guildId));
     setText(draft.text, draft.mentions);
@@ -705,7 +737,7 @@ export function App(props: {
     const failed: string[] = [];
     for (const path of paths) {
       try {
-        addAttachment(await deps().readAttachmentFromPath(path));
+        if (!addAttachment(await deps().readAttachmentFromPath(path))) return added;
         added += 1;
       } catch (error) {
         failed.push(`${path.split("/").pop()}: ${error instanceof Error ? error.message : "error"}`);
@@ -735,7 +767,7 @@ export function App(props: {
         flash("la imagen del portapapeles pesa más de 10 MiB");
         return;
       }
-      addAttachment({ filename: image.filename, mime: image.mime, bytes: image.bytes });
+      if (!addAttachment({ filename: image.filename, mime: image.mime, bytes: image.bytes })) return;
       setInsert(true);
       flash(`📎 pegada la imagen ${image.filename} (${formatBytes(image.bytes.byteLength)}) · Enter la manda`);
       return;
@@ -1158,10 +1190,8 @@ export function App(props: {
           return;
         }
         case "x": {
-          const id = channelId();
-          if (id !== null && currentAttachments().length > 0) {
-            setAttachments((previous) => ({ ...previous, [id]: (previous[id] ?? []).slice(0, -1) }));
-          }
+          const count = editAttachments()?.length ?? currentAttachments().length;
+          if (count > 0) removeAttachmentAt(count - 1);
           return;
         }
         default:
@@ -1403,7 +1433,7 @@ export function App(props: {
         theme={theme()}
         placeholder={placeholder()}
         context={composerContext()}
-        attachments={currentAttachments()}
+        attachments={editAttachments()?.map((a) => ({ filename: a.filename, bytes: { byteLength: a.size } })) ?? currentAttachments()}
         prompt={attachPrompt()}
         onClick={startComposer}
         onCursor={(offset) => {
@@ -1411,10 +1441,7 @@ export function App(props: {
         }}
         onAttach={textChannel() ? () => setAttachPrompt("") : undefined}
         onPaste={textChannel() ? () => void pasteFromClipboard() : undefined}
-        onRemoveAttachment={(index) => {
-          const id = channelId();
-          if (id !== null) setAttachments((previous) => ({ ...previous, [id]: (previous[id] ?? []).filter((_, i) => i !== index) }));
-        }}
+        onRemoveAttachment={(index) => removeAttachmentAt(index)}
       />
       <VoiceBar
         store={props.store}

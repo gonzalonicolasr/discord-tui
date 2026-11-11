@@ -9,8 +9,10 @@ import type { Store } from "../store/store";
  */
 export function createEditActions(deps: { rest: RestClient; store?: Store }) {
   return {
-    async edit(channelId: string, messageId: string, content: string): Promise<void> {
-      const message = await patchMessage(deps.rest, channelId, messageId, { content });
+    /** `keepAttachments`: ids de los adjuntos que quedan (los demás se sacan); sin pasarlo no se tocan. */
+    async edit(channelId: string, messageId: string, content: string, keepAttachments?: string[]): Promise<void> {
+      const body = keepAttachments ? { content, attachments: keepAttachments.map((id) => ({ id })) } : { content };
+      const message = await patchMessage(deps.rest, channelId, messageId, body);
       const d = message && typeof message === "object" && typeof message.id === "string" ? message : { id: messageId, channel_id: channelId, content };
       deps.store?.dispatch({ type: "gw", t: "MESSAGE_UPDATE", d: { ...d, channel_id: channelId } });
     },

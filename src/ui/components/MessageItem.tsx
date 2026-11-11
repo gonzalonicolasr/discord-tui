@@ -260,8 +260,14 @@ export function MessageItem(props: {
               e.stopPropagation();
               props.onOpen?.(attachment.url);
             };
+            // Sobre una imagen: el primer click selecciona el mensaje (aparece ✎ editar / 🗑 borrar); el segundo la abre.
+            const imageClick = (e: Click): void => {
+              e.stopPropagation();
+              if (!props.selected && props.onSelect) props.onSelect();
+              else props.onOpen?.(attachment.url);
+            };
             return view.kind === "image" ? (
-              <box onMouseDown={openIt}>
+              <box onMouseDown={imageClick}>
                 <InlineImage url={view.url} cols={view.cols} rows={view.rows} label={view.label} theme={props.theme} animate={animate()} />
               </box>
             ) : (

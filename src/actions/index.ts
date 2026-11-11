@@ -29,7 +29,7 @@ export interface Actions {
   toggleMembers(): void;
   send(channelId: string, content: string, opts?: { replyTo?: string; attachments?: PendingAttachment[] }): Promise<void>;
   retry(nonce: string): Promise<void>;
-  edit(channelId: string, messageId: string, content: string): Promise<void>;
+  edit(channelId: string, messageId: string, content: string, keepAttachments?: string[]): Promise<void>;
   remove(channelId: string, messageId: string): Promise<void>;
   toggleReaction(channelId: string, messageId: string, emoji: { id: string | null; name: string }): Promise<void>;
   /** Vota (o saca el voto) en una respuesta de encuesta; no pide nada si la encuesta terminó. */
@@ -206,9 +206,9 @@ export function createActions(deps: ActionsDeps): Actions {
   const reactActions = createReactActions({ store: deps.store, rest: deps.rest });
   const pollActions = createPollActions({ store: deps.store, rest: deps.rest, now: deps.now });
 
-  async function edit(channelId: string, messageId: string, content: string): Promise<void> {
+  async function edit(channelId: string, messageId: string, content: string, keepAttachments?: string[]): Promise<void> {
     try {
-      await editActions.edit(channelId, messageId, content);
+      await editActions.edit(channelId, messageId, content, keepAttachments);
     } catch (error) {
       reportError("edit-message", "editar el mensaje", error);
       throw error;

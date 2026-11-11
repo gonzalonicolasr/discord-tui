@@ -69,7 +69,7 @@ export async function patchMessage(
   rest: RestClient,
   channelId: string,
   messageId: string,
-  body: { content: string },
+  body: { content: string; attachments?: { id: string }[] },
 ): Promise<APIMessage> {
   return rest.request<APIMessage>("PATCH", `/channels/${channelId}/messages/${messageId}`, body);
 }

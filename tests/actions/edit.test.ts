@@ -9,7 +9,7 @@ import { startFakeHttp } from "../fakes/fake-http";
 
 const gateway = { send() {} } as never;
 
-function setup(handler: (req: Request) => Response) {
+function setup(handler: (req: Request) => Response | Promise<Response>) {
   const fake = startFakeHttp(handler);
   const http = createHttp({ props: createClientProps({ buildNumber: 1 }), baseUrl: fake.url });
   const rest = createRestClient({ http, onUnauthorized: () => {} });
@@ -33,5 +33,17 @@ test("remove sends DELETE", async () => {
 
   expect(fake.requests[0]!.method).toBe("DELETE");
   expect(new URL(fake.requests[0]!.url).pathname).toBe("/channels/123456789012345678/messages/223456789012345678");
+  fake.stop();
+});
+
+test("edit with kept attachments sends their ids (Discord removes the rest)", async () => {
+  const bodies: unknown[] = [];
+  const { fake, actions } = setup(async (req) => {
+    bodies.push(await req.json());
+    return Response.json({ id: "223456789012345678" });
+  });
+  await actions.edit("123456789012345678", "223456789012345678", "nuevo", ["900000000000000001"]);
+  await actions.edit("123456789012345678", "223456789012345678", "sin tocar adjuntos");
+  expect(bodies).toEqual([{ content: "nuevo", attachments: [{ id: "900000000000000001" }] }, { content: "sin tocar adjuntos" }]);
   fake.stop();
 });
