@@ -88,6 +88,19 @@ export async function putReaction(
   await rest.request("PUT", `/channels/${channelId}/messages/${messageId}/reactions/${path}/@me`);
 }
 
+/** Quiénes pusieron una reacción (hasta `limit`, máx. 100). */
+export async function getReactionUsers(
+  rest: RestClient,
+  channelId: string,
+  messageId: string,
+  emoji: { id: string | null; name: string },
+  limit = 25,
+): Promise<Array<{ id: string; username?: string; global_name?: string | null }>> {
+  const path = encodeURIComponent(emoji.id !== null ? `${emoji.name}:${emoji.id}` : emoji.name);
+  const users = await rest.request<unknown>("GET", `/channels/${channelId}/messages/${messageId}/reactions/${path}?limit=${limit}&type=0`);
+  return Array.isArray(users) ? users.filter((u): u is { id: string } => typeof u?.id === "string") : [];
+}
+
 /** Vota en una encuesta (docs.discord.food, "Create Poll Vote"): `answer_ids` vacío saca el voto. 204 sin cuerpo. */
 export async function putPollVote(rest: RestClient, channelId: string, messageId: string, answerIds: number[]): Promise<void> {
   await rest.request("PUT", `/channels/${channelId}/polls/${messageId}/answers/@me`, { answer_ids: answerIds });

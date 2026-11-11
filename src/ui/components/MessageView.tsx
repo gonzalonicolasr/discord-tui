@@ -50,6 +50,7 @@ export function MessageView(props: {
   onSelect?(messageId: string): void;
   onAction?(action: MessageAction, messageId: string): void;
   onReact?(messageId: string, emoji: { id: string | null; name: string }): void;
+  onReactionHover?(messageId: string, emoji: { id: string | null; name: string; label: string; count: number } | null): void;
   onOpen?(url: string): void;
   onVote?(messageId: string, answerId: number): void;
   onLoadOlder?(): void;
@@ -365,6 +366,7 @@ export function MessageView(props: {
                   onSelect={() => props.onSelect?.(message.id)}
                   onAction={props.onAction ? (action) => props.onAction?.(action, message.id) : undefined}
                   onReact={(emoji) => props.onReact?.(message.id, emoji)}
+                  onReactionHover={(emoji) => props.onReactionHover?.(message.id, emoji)}
                   onOpen={(url) => props.onOpen?.(url)}
                   onVote={(answerId) => props.onVote?.(message.id, answerId)}
                 />

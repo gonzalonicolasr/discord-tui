@@ -1,6 +1,6 @@
 import type { Gateway } from "../gateway/connection";
 import type { RestClient } from "../rest/client";
-import { getMessages, postAck, postTyping, searchArchivedThreads } from "../rest/routes";
+import { getMessages, getReactionUsers, postAck, postTyping, searchArchivedThreads } from "../rest/routes";
 import { buildGuildSubscription, nextMemberRanges } from "../gateway/subscriptions";
 import { uploadAttachments } from "../uploads/upload";
 import { createAckScheduler } from "./ack";
@@ -32,6 +32,8 @@ export interface Actions {
   edit(channelId: string, messageId: string, content: string, keepAttachments?: string[]): Promise<void>;
   remove(channelId: string, messageId: string): Promise<void>;
   toggleReaction(channelId: string, messageId: string, emoji: { id: string | null; name: string }): Promise<void>;
+  /** Nombres de quiénes pusieron la reacción (para mostrarlos al pasar el mouse). */
+  reactionUsers?(channelId: string, messageId: string, emoji: { id: string | null; name: string }): Promise<string[]>;
   /** Vota (o saca el voto) en una respuesta de encuesta; no pide nada si la encuesta terminó. */
   votePoll?(channelId: string, messageId: string, answerId: number): Promise<void>;
   /** Cada tecla escrita en el composer: manda typing como máximo cada 8 s. */
@@ -224,6 +226,28 @@ export function createActions(deps: ActionsDeps): Actions {
     }
   }
 
+  // Quién reaccionó: se pide una vez por mensaje+emoji+cantidad (si cambia la cantidad, se vuelve a pedir).
+  const reactionCache = new Map<string, Promise<string[]>>();
+  function reactionUsers(channelId: string, messageId: string, emoji: { id: string | null; name: string }): Promise<string[]> {
+    const state = deps.store.getState();
+    const count = (state.messages[channelId]?.byId[messageId] as any)?.reactions?.find(
+      (r: any) => (r?.emoji?.id ?? null) === emoji.id && r?.emoji?.name === emoji.name,
+    )?.count;
+    const key = `${messageId}:${emoji.id ?? emoji.name}:${count ?? "?"}`;
+    let job = reactionCache.get(key);
+    if (!job) {
+      job = getReactionUsers(deps.rest, channelId, messageId, emoji).then((users) => {
+        const now = deps.store.getState();
+        const guildId = now.channels[channelId]?.guildId ?? null;
+        return users.map((u) => (guildId !== null ? now.members[guildId]?.[u.id]?.nick : null) ?? u.global_name ?? u.username ?? now.users[u.id]?.globalName ?? "alguien");
+      });
+      job.catch(() => reactionCache.delete(key));
+      if (reactionCache.size > 200) reactionCache.clear();
+      reactionCache.set(key, job);
+    }
+    return job;
+  }
+
   async function toggleReaction(
     channelId: string,
     messageId: string,
@@ -304,6 +328,7 @@ export function createActions(deps: ActionsDeps): Actions {
     edit,
     remove,
     toggleReaction,
+    reactionUsers,
     votePoll,
   };
 }

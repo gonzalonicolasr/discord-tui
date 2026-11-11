@@ -311,6 +311,14 @@ export function demoActions(store: Store): Actions {
       store.dispatch({ type: "gw", t: "MESSAGE_DELETE", d: { id: messageId, channel_id: channelId } });
     },
     toggleReaction: async () => {},
+    // Quién reaccionó, inventado para la demo (la primera persona sos vos si tu reacción está puesta).
+    reactionUsers: async (channelId, messageId, emoji) => {
+      const message = store.getState().messages[channelId]?.byId[messageId] as any;
+      const reaction = message?.reactions?.find((r: any) => r?.emoji?.name === emoji.name);
+      const pool = ["Ramiro", "Celes", "dfuentes", "Pepa", "bruno_7712"];
+      const names = reaction?.me ? ["Gon", ...pool] : pool;
+      return names.slice(0, reaction?.count ?? 1);
+    },
     setStatus: (status) => store.dispatch({ type: "settings/set", patch: { status } }),
     voice,
   };

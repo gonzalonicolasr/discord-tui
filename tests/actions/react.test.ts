@@ -47,3 +47,24 @@ test("toggle sends PUT first time and DELETE when me is true", async () => {
   expect(fake.requests[1]!.url).toContain("%F0%9F%91%8D");
   fake.stop();
 });
+
+test("reactionUsers asks Discord who reacted and uses the server nickname when there is one", async () => {
+  const { createActions } = await import("../../src/actions");
+  const { createStore, emptyState } = await import("../../src/store/store");
+  const paths: string[] = [];
+  const rest = {
+    closed: false,
+    request: async <T,>(method: string, path: string): Promise<T> => {
+      paths.push(`${method} ${path}`);
+      return [{ id: "1", username: "ramiro", global_name: "Ramiro" }, { id: "2", username: "celes", global_name: null }] as T;
+    },
+  };
+  const store = createStore(emptyState());
+  store.dispatch({ type: "gw", t: "GUILD_MEMBER_UPDATE", d: { guild_id: "300000000000000001", user: { id: "2", username: "celes" }, nick: "Celes💜", roles: [] } });
+  store.dispatch({ type: "gw", t: "CHANNEL_CREATE", d: { id: "300000000000000002", guild_id: "300000000000000001", type: 0, name: "general" } });
+  const actions = createActions({ store, rest: rest as never, gateway: { send() {} } as never });
+  const names = await actions.reactionUsers!("300000000000000002", "300000000000000003", { id: null, name: "💯" });
+  expect(paths[0]).toBe(`GET /channels/300000000000000002/messages/300000000000000003/reactions/${encodeURIComponent("💯")}?limit=25&type=0`);
+  expect(names[0]).toBe("Ramiro");
+  expect(names[1]).toMatch(/Celes|celes/);
+});

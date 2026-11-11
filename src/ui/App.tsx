@@ -328,6 +328,26 @@ export function App(props: {
     if (id !== null) setAttachments((previous) => ({ ...previous, [id]: (previous[id] ?? []).filter((_, i) => i !== index) }));
   }
 
+  /** Mouse sobre una reacción: "💯 Ramiro, Celes +3" arriba del cuadro de texto. */
+  let hoveredReaction = "";
+  function showReactionUsers(messageId: string, emoji: { id: string | null; name: string; label: string; count: number } | null): void {
+    const id = channelId();
+    const key = emoji ? `${messageId}:${emoji.id ?? emoji.name}` : "";
+    hoveredReaction = key;
+    if (!emoji || id === null || !props.actions.reactionUsers) return;
+    void props.actions
+      .reactionUsers(id, messageId, emoji)
+      .then((names) => {
+        if (hoveredReaction !== key || names.length === 0) return;
+        const shown = names.slice(0, 6);
+        const rest = Math.max(emoji.count, names.length) - shown.length;
+        flash(`${emoji.label} ${shown.join(", ")}${rest > 0 ? ` +${rest}` : ""}`);
+      })
+      .catch(() => {
+        if (hoveredReaction === key) flash("no pude ver quién reaccionó");
+      });
+  }
+
   /** Suma un adjunto al mensaje que vas a mandar; false si no se pudo (al editar no se suman). */
   function addAttachment(file: PendingAttachment): boolean {
     const id = channelId();
@@ -1305,6 +1325,7 @@ export function App(props: {
         const id = channelId();
         if (id !== null) void props.actions.toggleReaction(id, messageId, emoji).catch(() => {});
       }}
+      onReactionHover={(messageId, emoji) => showReactionUsers(messageId, emoji)}
       onOpen={(url) => props.actions.openUrl?.(url)}
       onVote={(messageId, answerId) => {
         const id = channelId();

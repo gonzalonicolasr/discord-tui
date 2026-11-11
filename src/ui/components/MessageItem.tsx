@@ -174,6 +174,8 @@ export function MessageItem(props: {
   onSelect?(): void;
   onAction?(action: MessageAction): void;
   onReact?(emoji: { id: string | null; name: string }): void;
+  /** Mouse sobre una reacción (null al salir): para mostrar quiénes la pusieron. */
+  onReactionHover?(emoji: { id: string | null; name: string; label: string; count: number } | null): void;
   onOpen?(url: string): void;
   onVote?(answerId: number): void;
 }): JSX.Element {
@@ -306,17 +308,20 @@ export function MessageItem(props: {
                   props.onReact?.({ id: reaction.emoji.id, name: reaction.emoji.name });
                 };
                 const id = reaction.emoji.id;
+                const label = id ? `:${reaction.emoji.name}:` : reaction.emoji.name;
+                const over = (): void => props.onReactionHover?.({ id: reaction.emoji.id, name: reaction.emoji.name, label, count: reaction.count });
+                const out = (): void => props.onReactionHover?.(null);
                 // Emoji custom con imágenes: chip = fila de renderables (texto, imagen de 2x1, texto).
                 return (
                   <Show
                     when={id && props.images}
                     fallback={
-                      <text fg={fg()} bg={bg()} onMouseDown={toggle}>
+                      <text fg={fg()} bg={bg()} onMouseDown={toggle} onMouseOver={over} onMouseOut={out}>
                         {` ${id ? `:${reaction.emoji.name}:` : reaction.emoji.name} ${reaction.count} `}
                       </text>
                     }
                   >
-                    <box flexDirection="row" backgroundColor={bg()} onMouseDown={toggle}>
+                    <box flexDirection="row" backgroundColor={bg()} onMouseDown={toggle} onMouseOver={over} onMouseOut={out}>
                       <text fg={fg()} bg={bg()}>{" "}</text>
                       <InlineImage url={emojiUrl(id!, reaction.emoji.animated === true)} cols={2} rows={1} label={`:${reaction.emoji.name}:`} theme={props.theme} raw animate={animate()} />
                       <text fg={fg()} bg={bg()}>{` ${reaction.count} `}</text>
