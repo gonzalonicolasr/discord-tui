@@ -259,7 +259,7 @@ test("clicking on a wrapped or second line puts the cursor on that character", a
   await t.mockInput.typeText("Z");
   expect(await t.send()).toBe(`uno\n${"a".repeat(100)}ZYbb`);
 
-  t.press("i");
+  // después de mandar se sigue en modo escritura (como Discord): se pega directo
   await t.mockInput.pasteBracketedText("abc\ndefgh");
   await t.renderOnce();
   const rows = t.captureCharFrame().split("\n");

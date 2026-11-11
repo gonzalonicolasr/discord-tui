@@ -587,6 +587,7 @@ export function App(props: {
         return;
       }
       clearComposer();
+      setInsert(true); // como Discord: el cuadro sigue listo para escribir
       return;
     }
 
@@ -595,6 +596,7 @@ export function App(props: {
     if (reply !== null) opts.replyTo = reply;
     if (files.length > 0) opts.attachments = files;
     clearComposer();
+    setInsert(true); // como Discord: después de mandar seguís escribiendo, sin volver a hacer click (Esc sale)
     setSelectedId(null);
     await props.actions.send(id, content, opts);
   }

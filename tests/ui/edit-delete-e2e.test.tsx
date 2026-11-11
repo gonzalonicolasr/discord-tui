@@ -63,6 +63,8 @@ test("send → e edits it (PATCH, shown right away with (editado)) → dd y dele
   await h.mockInput.typeText(" editado");
   h.mockInput.pressEnter();
   await settle(h);
+  h.mockInput.pressEscape(); // después de editar sigue en modo escritura: Esc vuelve a los atajos
+  await Bun.sleep(80);
   expect(bodies.find((b) => b.method === "PATCH")).toEqual({ method: "PATCH", path: `/channels/${DEMO.general}/messages/${NEW_ID}`, body: { content: "hola mundo editado" } });
   expect(store.getState().messages[DEMO.general]!.byId[NEW_ID]!.content).toBe("hola mundo editado");
   expect(h.captureCharFrame()).toMatch(/hola mundo editado.*\(editado\)/);

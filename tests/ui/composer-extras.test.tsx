@@ -180,6 +180,8 @@ test("e edits the own selected message; dd + y deletes it; + reacts", async () =
   await mockInput.typeText("!");
   mockInput.pressEnter();
   await Bun.sleep(5);
+  mockInput.pressEscape(); // después de editar sigue en modo escritura: Esc vuelve a los atajos
+  await Bun.sleep(80);
   mockInput.pressKey("k");
   mockInput.pressKey("j");
   mockInput.pressKey("d");
