@@ -43,3 +43,17 @@ test("ñ and accents arrive with their text even if the key is the US ';' (Latin
   await Bun.sleep(10);
   expect(sent).toEqual(["ñÑá"]);
 });
+
+test("Ctrl+R reloads zcord from any mode (and says so)", async () => {
+  const store = buildDemoStore();
+  let reloads = 0;
+  const h = await testRender(() => <App store={store} actions={demoActions(store)} onQuit={() => {}} onReload={() => reloads++} />, { width: 160, height: 45, kittyKeyboard: true });
+  await h.renderOnce();
+  h.mockInput.pressKey("r", { ctrl: true });
+  await h.renderOnce();
+  expect(reloads).toBe(1);
+  expect(h.captureCharFrame()).toContain("recargando zcord…");
+  h.mockInput.pressKey("i");
+  h.mockInput.pressKey("r", { ctrl: true });
+  expect(reloads).toBe(2);
+});

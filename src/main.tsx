@@ -5,6 +5,7 @@ import { KITTY_KEYBOARD } from "./ui/kitty";
 import { boot } from "./app/boot";
 import { Root } from "./app/root";
 import { createRuntime, type Runtime } from "./app/runtime";
+import { captureReloadState, RELOAD_EXIT_CODE, restoreAfterReload, saveReloadState, takeReloadState, watchForCodeChanges } from "./app/reload";
 import { deleteSession, loadSession, type Session } from "./auth/session";
 import { validateToken } from "./auth/token-login";
 import { fetchBuildNumber } from "./client-props/build-number";
@@ -60,6 +61,19 @@ async function main(): Promise<void> {
     });
   };
 
+  // Ctrl+R: se guarda dónde estás, se sale de voz y se cierra con RELOAD_EXIT_CODE; bin/zcord vuelve a abrir
+  // zcord (recompilado si cambió algo) y al arrancar se vuelve al mismo canal y a la llamada.
+  const reload = (runtime: Runtime): void => {
+    if (quitting) return;
+    quitting = true;
+    saveReloadState(captureReloadState(runtime.store));
+    void runtime.stop().finally(() => {
+      renderer.destroy();
+      void renderer.closed.then(() => process.exit(RELOAD_EXIT_CODE));
+    });
+  };
+  const canReload = process.env.ZCORD_HOME !== undefined;
+
   const clientProps = createClientProps({ buildNumber });
 
   if (result.kind === "login") {
@@ -71,6 +85,7 @@ async function main(): Promise<void> {
           clientProps={clientProps}
           initialRuntime={null}
           onQuit={quit}
+          onReload={canReload ? reload : undefined}
           kittyKeyboard={kittyKeyboard}
         />
       ),
@@ -88,6 +103,11 @@ async function main(): Promise<void> {
     initialSettings: settings,
     kittyKeyboard,
   });
+  const saved = takeReloadState();
+  if (saved) restoreAfterReload(runtime.store, runtime.actions as never, saved);
+  watchForCodeChanges(() =>
+    runtime.store.dispatch({ type: "notice/push", key: "code-changed", level: "warn", text: "Hay cambios en zcord: Ctrl+R para recargar sin salir." }),
+  );
   await render(
     () => (
       <Root
@@ -96,6 +116,7 @@ async function main(): Promise<void> {
         clientProps={clientProps}
         initialRuntime={runtime}
         onQuit={quit}
+        onReload={canReload ? reload : undefined}
         kittyKeyboard={kittyKeyboard}
       />
     ),

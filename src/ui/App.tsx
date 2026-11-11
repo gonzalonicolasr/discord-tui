@@ -98,6 +98,8 @@ export function App(props: {
   store: Store;
   actions: Actions;
   onQuit: () => void;
+  /** Ctrl+R: recargar zcord sin salir de la terminal (solo con bin/zcord). */
+  onReload?: () => void;
   settingsDeps?: SettingsDeps;
   deps?: Partial<AppDeps>;
   onActivity?(): void;
@@ -913,6 +915,12 @@ export function App(props: {
         return;
       }
       props.onActivity?.();
+      // Ctrl+R recarga zcord (código nuevo, sin salir de la terminal): funciona en cualquier modo.
+      if (key.ctrl && key.name === "r" && props.onReload) {
+        flash("recargando zcord…");
+        props.onReload();
+        return;
+      }
       // Diagnóstico del pegado: solo teclas con Ctrl/Alt o sin nombre (nunca lo que se escribe).
       if (key.ctrl || key.meta || !key.name) {
         log.info("ui.key", { msg: JSON.stringify({ name: key.name, ctrl: key.ctrl, meta: key.meta, shift: key.shift, raw: key.raw ?? key.sequence }) });

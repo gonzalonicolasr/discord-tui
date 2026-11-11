@@ -213,7 +213,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
           type: "notice/push",
           key: "update-available",
           level: "warn",
-          text: `Hay una versión nueva de zcord (${behind} cambio${behind === 1 ? "" : "s"}): se instala sola la próxima vez que lo abras.`,
+          text: `Hay una versión nueva de zcord (${behind} cambio${behind === 1 ? "" : "s"}): Ctrl+R la instala y recarga (o se instala sola la próxima vez que lo abras).`,
         }),
       );
     }, 15_000);

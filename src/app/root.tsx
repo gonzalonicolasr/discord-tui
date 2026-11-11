@@ -26,6 +26,8 @@ export interface RootProps {
   /** `null` = arrancar en el login; un runtime ya creado = sesión guardada (main/offline). */
   initialRuntime: Runtime | null;
   onQuit: (runtime: Runtime | null) => void;
+  /** Ctrl+R: cerrar prolijo y volver a abrir (bin/zcord lo relanza con el código nuevo). */
+  onReload?: (runtime: Runtime) => void;
   kittyKeyboard: () => boolean;
   /** Se inyecta en tests; por defecto el remote auth real. */
   auth?: RootAuth;
@@ -107,6 +109,7 @@ export function Root(props: RootProps): JSX.Element {
           store={active().store}
           actions={active().actions}
           onQuit={() => props.onQuit(active())}
+          onReload={props.onReload ? () => props.onReload?.(active()) : undefined}
           onActivity={() => active().activity()}
           images
           splash

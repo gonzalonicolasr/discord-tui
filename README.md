@@ -65,7 +65,8 @@ zcord
 - **`zcord demo`** muestra la interfaz con datos de prueba, sin loguearte.
 - **El instalador** baja zcord a `~/.local/share/zcord`, trae [Bun](https://bun.sh) si falta y deja `zcord` en
   `~/.local/bin`. **Se actualiza solo:** si hay una versión nueva, te avisa y se instala la próxima vez que lo
-  abrís (`ZCORD_NO_AUTO_UPDATE=1` lo apaga); `zcord update` la trae en el momento. Para desinstalar: `rm -rf ~/.local/share/zcord ~/.local/bin/zcord`.
+  abrís (`ZCORD_NO_AUTO_UPDATE=1` lo apaga); `zcord update` la trae en el momento. **Ctrl+R** recarga zcord sin
+  salir de la terminal (con el código nuevo, y vuelve al canal y a la llamada donde estabas). Para desinstalar: `rm -rf ~/.local/share/zcord ~/.local/bin/zcord`.
 - **Arch / Omarchy:** también está como paquete del AUR, `yay -S zcord-git`, y se actualiza con el resto del
   sistema (`yay -Syu`). El `PKGBUILD` vive en `packaging/aur/`.
 - **Requisitos:** Linux con PipeWire y Wayland, y una terminal con protocolo Kitty (Ghostty o Kitty). Opcionales:

@@ -49,15 +49,37 @@ fi
 if [ "${ZCORD_DEV:-}" = 1 ]; then
   case "${1:-}" in
     demo) shift; exec bun scripts/demo.tsx "$@" ;;
-    *) exec bun run src/main.tsx "$@" ;;
   esac
 fi
-if [ ! -f dist/src/main.js ] || [ -n "$(find src scripts/demo.tsx scripts/demo-state.ts scripts/demo scripts/build.ts package.json bun.lock -newer dist/src/main.js -print -quit 2>/dev/null)" ]; then
-  bun scripts/build.ts >/dev/null
+
+# Recompila dist/ si cambió el código (sin Babel en ejecución: menos memoria y arranque más rápido).
+build_if_needed() {
+  if [ ! -f dist/src/main.js ] || [ -n "$(find src scripts/demo.tsx scripts/demo-state.ts scripts/demo scripts/build.ts package.json bun.lock -newer dist/src/main.js -print -quit 2>/dev/null)" ]; then
+    bun scripts/build.ts >/dev/null
+  fi
+}
+
+if [ "${1:-}" = demo ]; then
+  shift
+  build_if_needed
+  cd dist && exec bun scripts/demo.js "$@"
 fi
-# Desde dist/: su bunfig.toml vacío evita el preload de Babel del proyecto.
-cd dist
-case "${1:-}" in
-  demo) shift; exec bun scripts/demo.js "$@" ;;
-  *) exec bun src/main.js "$@" ;;
-esac
+
+# La app sale con 75 cuando apretás Ctrl+R: se aplica una actualización pendiente, se recompila si hace falta
+# y se vuelve a abrir (zcord vuelve solo al canal y a la llamada donde estabas). Cualquier otra salida termina.
+while :; do
+  cd "$here"
+  if [ "${ZCORD_DEV:-}" = 1 ]; then
+    set +e; bun run src/main.tsx "$@"; code=$?; set -e
+  else
+    build_if_needed
+    # Desde dist/: su bunfig.toml vacío evita el preload de Babel del proyecto.
+    cd dist
+    set +e; bun src/main.js "$@"; code=$?; set -e
+    cd "$here"
+  fi
+  [ "$code" -eq 75 ] || exit "$code"
+  if [ -f "$flag" ] && [ "${ZCORD_NO_AUTO_UPDATE:-}" != 1 ] && [ "${ZCORD_DEV:-}" != 1 ]; then
+    update_zcord || true
+  fi
+done
