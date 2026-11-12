@@ -6,6 +6,7 @@ import type { Actions, InboxMention } from "../actions";
 import { log } from "../log/logger";
 import { COMMON_EMOJI } from "../emoji/common";
 import { animationScheduler } from "../images/animation";
+import { audioPlayer, isAudioAttachment } from "../media/audio-player";
 import { takeThemeErrors } from "./theme-files";
 import { userAvatarUrl } from "../images/avatar";
 import { parseMarkdown, plainText } from "../markdown/parse";
@@ -144,6 +145,9 @@ export function App(props: {
   const showAvatars = useSelector(props.store, (state) => state.settings.showAvatars);
   // Terminal sin foco (Ghostty manda CSI I / CSI O): los GIFs se frenan y no queda timer vivo.
   const renderer = useRenderer();
+  // Audios y mensajes de voz suenan por la salida elegida en settings (la misma que las llamadas).
+  const player = audioPlayer(() => props.store.getState().settings.outputDevice);
+  onCleanup(() => player.stop());
   const pauseAnimations = (): void => animationScheduler.setPaused(true);
   const resumeAnimations = (): void => animationScheduler.setPaused(false);
   renderer.on("blur", pauseAnimations);
@@ -1257,6 +1261,17 @@ export function App(props: {
           if (forum !== null) return void props.actions.loadArchivedPosts?.(forum).catch(() => {});
           if (!isTextChannel()) return;
           setAttachPrompt("");
+          return;
+        }
+        case "p": {
+          // p: escuchar (o parar) el audio / mensaje de voz del mensaje seleccionado.
+          const message = selectedMessage();
+          const audio = (Array.isArray(message?.attachments) ? message.attachments : []).find((a: any) => isAudioAttachment(a));
+          if (!audio) {
+            flash(selectedId() === null ? "seleccioná un mensaje con un audio (k)" : "ese mensaje no tiene audio");
+            return;
+          }
+          player.toggle(audio.id, audio.url);
           return;
         }
         case "x": {

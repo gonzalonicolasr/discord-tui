@@ -16,6 +16,8 @@ import { clockTime, displayName, hashIndex, memberColor, truncate } from "../for
 import { roleHex, type Theme } from "../theme";
 import { AnimatedImage } from "./AnimatedImage";
 import { Avatar } from "./Avatar";
+import { isAudioAttachment } from "../../media/audio-player";
+import { AudioAttachment } from "./AudioAttachment";
 import { Button, type Click } from "./Button";
 import { Markdown, type MdContext } from "./Markdown";
 import { PollBox } from "./PollBox";
@@ -257,6 +259,20 @@ export function MessageItem(props: {
         </Show>
         <For each={props.message.attachments}>
           {(attachment) => {
+            if (isAudioAttachment(attachment)) {
+              const extra = attachment as typeof attachment & { duration_secs?: number; waveform?: string };
+              return (
+                <AudioAttachment
+                  id={attachment.id}
+                  url={attachment.url}
+                  filename={attachment.filename}
+                  voice={typeof extra.waveform === "string"}
+                  durationSecs={extra.duration_secs}
+                  waveform={extra.waveform}
+                  theme={props.theme}
+                />
+              );
+            }
             const view = attachmentView(attachment, props.images ? IMAGE_MODE : "links");
             const openIt = (e: Click): void => {
               e.stopPropagation();
