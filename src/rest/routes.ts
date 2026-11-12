@@ -5,10 +5,11 @@ import type { RestClient } from "./client";
 export async function getMessages(
   rest: RestClient,
   channelId: string,
-  opts: { before?: string; limit?: number } = {},
+  opts: { before?: string; around?: string; limit?: number } = {},
 ): Promise<APIMessage[]> {
   const params = new URLSearchParams({ limit: String(opts.limit ?? 50) });
   if (opts.before) params.set("before", opts.before);
+  if (opts.around) params.set("around", opts.around);
   return rest.request<APIMessage[]>("GET", `/channels/${channelId}/messages?${params.toString()}`);
 }
 
@@ -149,4 +150,10 @@ export async function patchSettingsProto(
   settings: string,
 ): Promise<{ settings?: string; out_of_date?: boolean }> {
   return rest.request("PATCH", `/users/@me/settings-proto/${type}`, { settings });
+}
+
+/** Menciones recientes de la cuenta en todos lados (la "bandeja" de Discord): @vos, tus roles y @everyone. */
+export async function getMentions(rest: RestClient, limit = 25): Promise<APIMessage[]> {
+  const list = await rest.request<unknown>("GET", `/users/@me/mentions?limit=${limit}&roles=true&everyone=true`);
+  return Array.isArray(list) ? (list as APIMessage[]) : [];
 }

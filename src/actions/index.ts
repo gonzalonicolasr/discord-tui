@@ -1,6 +1,7 @@
 import type { Gateway } from "../gateway/connection";
 import type { RestClient } from "../rest/client";
-import { getMessages, getReactionUsers, postAck, postTyping, searchArchivedThreads } from "../rest/routes";
+import { getMentions, getMessages, getReactionUsers, postAck, postTyping, searchArchivedThreads } from "../rest/routes";
+import { compareSnowflakes } from "../util/snowflake";
 import { buildGuildSubscription, nextMemberRanges } from "../gateway/subscriptions";
 import { uploadAttachments } from "../uploads/upload";
 import { createAckScheduler } from "./ack";
@@ -19,6 +20,18 @@ import type { OwnStatus } from "../settings/settings";
 import type { IdlePresence } from "./presence";
 import type { StatusSync } from "./status-sync";
 
+/** Una mención de la bandeja, lista para mostrar. */
+export interface InboxMention {
+  messageId: string;
+  channelId: string;
+  guildId: string | null;
+  /** "Servidor › #canal" o "@persona". */
+  where: string;
+  author: string;
+  content: string;
+  timestamp: string;
+}
+
 export interface Actions {
   selectGuild(id: string | "@dms"): void;
   openChannel(id: string): Promise<void>;
@@ -32,6 +45,10 @@ export interface Actions {
   edit(channelId: string, messageId: string, content: string, keepAttachments?: string[]): Promise<void>;
   remove(channelId: string, messageId: string): Promise<void>;
   toggleReaction(channelId: string, messageId: string, emoji: { id: string | null; name: string }): Promise<void>;
+  /** Menciones recientes (bandeja): la más nueva primero. */
+  mentionsInbox?(): Promise<InboxMention[]>;
+  /** Ir a un mensaje: abre su servidor y canal y, si no estaba cargado, trae el historial alrededor de él. */
+  jumpToMessage?(channelId: string, messageId: string): Promise<void>;
   /** Nombres de quiénes pusieron la reacción (para mostrarlos al pasar el mouse). */
   reactionUsers?(channelId: string, messageId: string, emoji: { id: string | null; name: string }): Promise<string[]>;
   /** Vota (o saca el voto) en una respuesta de encuesta; no pide nada si la encuesta terminó. */
@@ -226,6 +243,38 @@ export function createActions(deps: ActionsDeps): Actions {
     }
   }
 
+  async function mentionsInbox(): Promise<InboxMention[]> {
+    const messages = await getMentions(deps.rest);
+    const state = deps.store.getState();
+    return messages
+      .filter((m: any) => typeof m?.id === "string" && typeof m?.channel_id === "string")
+      .map((m: any) => {
+        const channel = state.channels[m.channel_id];
+        const guildId: string | null = typeof m.guild_id === "string" ? m.guild_id : channel?.guildId ?? null;
+        const where =
+          guildId !== null
+            ? `${state.guilds[guildId]?.name ?? "servidor"} › #${channel?.name ?? "canal"}`
+            : channel?.name
+              ? `@${channel.name}`
+              : "mensaje directo";
+        const authorId = String(m.author?.id ?? "");
+        const author = (guildId !== null ? state.members[guildId]?.[authorId]?.nick : null) ?? m.author?.global_name ?? m.author?.username ?? "alguien";
+        return { messageId: m.id, channelId: m.channel_id, guildId, where, author, content: String(m.content ?? ""), timestamp: String(m.timestamp ?? "") };
+      })
+      .sort((a, b) => compareSnowflakes(b.messageId, a.messageId));
+  }
+
+  async function jumpToMessage(channelId: string, messageId: string): Promise<void> {
+    const channel = deps.store.getState().channels[channelId];
+    const guildId = channel?.guildId ?? null;
+    deps.store.dispatch({ type: "ui/selectGuild", id: guildId ?? "@dms" });
+    await openChannel(channelId);
+    if (!deps.store.getState().messages[channelId]?.byId[messageId]) {
+      const around = await getMessages(deps.rest, channelId, { around: messageId, limit: 50 });
+      deps.store.dispatch({ type: "messages/page", channelId, messages: around, mode: "older" });
+    }
+  }
+
   // Quién reaccionó: se pide una vez por mensaje+emoji+cantidad (si cambia la cantidad, se vuelve a pedir).
   const reactionCache = new Map<string, Promise<string[]>>();
   function reactionUsers(channelId: string, messageId: string, emoji: { id: string | null; name: string }): Promise<string[]> {
@@ -329,6 +378,8 @@ export function createActions(deps: ActionsDeps): Actions {
     remove,
     toggleReaction,
     reactionUsers,
+    mentionsInbox,
+    jumpToMessage,
     votePoll,
   };
 }

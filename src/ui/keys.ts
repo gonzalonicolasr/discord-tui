@@ -46,6 +46,7 @@ export const SPEC_KEYS: KeyEntry[] = [
   { key: "j + / -", desc: "volumen de un participante (±10 %)", group: "Voz" },
   { key: "gs", desc: "settings (audio, tema, imágenes)", group: "App" },
   { key: "gp", desc: "estado propio (en línea, ausente, no molestar, invisible)", group: "App" },
+  { key: "@", desc: "bandeja de menciones: quién te mencionó y dónde; Enter va al mensaje (también 🔔 abajo)", group: "App" },
   { key: "Ctrl-r", desc: "recargar zcord (código nuevo) sin salir: vuelve al canal y a la llamada", group: "App" },
   { key: "arrastrar", desc: "seleccionar texto con el mouse lo copia al soltar", group: "App" },
   { key: "mouse", desc: "click en canales, 🔊, mensajes y botones", group: "App" },

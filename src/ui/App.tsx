@@ -2,7 +2,7 @@ import type { KeyEvent, PasteEvent } from "@opentui/core";
 import { useKeyboard, usePaste, useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid";
 import { createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 
-import type { Actions } from "../actions";
+import type { Actions, InboxMention } from "../actions";
 import { log } from "../log/logger";
 import { COMMON_EMOJI } from "../emoji/common";
 import { animationScheduler } from "../images/animation";
@@ -37,6 +37,7 @@ import { StreamViewer } from "./components/StreamViewer";
 import type { MessageAction } from "./components/MessageItem";
 import { Button } from "./components/Button";
 import { Notices } from "./components/Notices";
+import { MentionsInbox } from "./components/MentionsInbox";
 import { QuickSwitcher, SWITCHER_ROWS } from "./components/QuickSwitcher";
 import { EmojiPicker, PICKER_ROWS } from "./components/EmojiPicker";
 import { moveInList } from "./list-window";
@@ -185,6 +186,11 @@ export function App(props: {
   /** Monitores para elegir qué transmitir (null = cerrado). */
   const [monitorChoices, setMonitorChoices] = createSignal<Monitor[] | null>(null);
   const [switcherOpen, setSwitcherOpen] = createSignal(false);
+  // Bandeja de menciones (@ o 🔔 en la barra): null = cargando.
+  const [inboxOpen, setInboxOpen] = createSignal(false);
+  const [inboxItems, setInboxItems] = createSignal<InboxMention[] | null>(null);
+  const [inboxError, setInboxError] = createSignal<string | null>(null);
+  const [inboxIndex, setInboxIndex] = createSignal(0);
   const [switcherQuery, setSwitcherQuery] = createSignal("");
   const [switcherIndex, setSwitcherIndex] = createSignal(0);
   const [pickerIndex, setPickerIndex] = createSignal(0);
@@ -328,6 +334,33 @@ export function App(props: {
     }
     const id = channelId();
     if (id !== null) setAttachments((previous) => ({ ...previous, [id]: (previous[id] ?? []).filter((_, i) => i !== index) }));
+  }
+
+  /** Abre la bandeja de menciones y las pide a Discord (las más nuevas primero). */
+  function openInbox(): void {
+    if (!props.actions.mentionsInbox) return flash("las menciones no están disponibles acá");
+    setInboxOpen(true);
+    setInboxItems(null);
+    setInboxError(null);
+    setInboxIndex(0);
+    void props.actions
+      .mentionsInbox()
+      .then((items) => setInboxItems(items))
+      .catch(() => setInboxError("no pude traer las menciones (¿sin conexión?)"));
+  }
+
+  /** Ir a la mención: su canal, con el mensaje seleccionado (se trae el historial alrededor si hace falta). */
+  function goToMention(index: number): void {
+    const item = inboxItems()?.[index];
+    setInboxOpen(false);
+    if (!item || !props.actions.jumpToMessage) return;
+    void props.actions
+      .jumpToMessage(item.channelId, item.messageId)
+      .then(() => {
+        setSelectedId(item.messageId);
+        props.actions.focus("messages");
+      })
+      .catch(() => flash("no pude abrir ese mensaje (¿lo borraron o ya no tenés acceso?)"));
   }
 
   /** Mouse sobre una reacción: "💯 Ramiro, Celes +3" arriba del cuadro de texto. */
@@ -935,6 +968,15 @@ export function App(props: {
         return;
       }
 
+      if (inboxOpen()) {
+        const count = inboxItems()?.length ?? 0;
+        if (key.name === "escape" || key.name === "q" || key.sequence === "@") return void setInboxOpen(false);
+        if ((key.name === "j" || key.name === "down") && count > 0) return void setInboxIndex((i) => Math.min(count - 1, i + 1));
+        if ((key.name === "k" || key.name === "up") && count > 0) return void setInboxIndex((i) => Math.max(0, i - 1));
+        if (key.name === "return" && count > 0) return void goToMention(inboxIndex());
+        return;
+      }
+
       if (switcherOpen()) {
         if (key.name === "escape") {
           setSwitcherOpen(false);
@@ -1241,6 +1283,7 @@ export function App(props: {
         return;
       }
       if (key.sequence === "?") setHelpOpen(true);
+      if (key.sequence === "@") return void openInbox();
       if (key.sequence === "R") retryFirstFailed();
       if (key.sequence === "D") props.actions.voice?.toggleDeaf();
       if (key.sequence === "S") void streamPress();
@@ -1490,6 +1533,7 @@ export function App(props: {
         onHelp={() => setHelpOpen(true)}
         onSettings={() => setSettingsOpen(true)}
         onStatus={() => setStatusMenuOpen(true)}
+        onMentions={props.actions.mentionsInbox ? openInbox : undefined}
         onSwitcher={() => {
           setSwitcherOpen(true);
           setSwitcherQuery("");
@@ -1511,6 +1555,17 @@ export function App(props: {
             setSwitcherOpen(false);
             setSwitcherQuery("");
           }}
+        />
+      </Show>
+      <Show when={inboxOpen()}>
+        <MentionsInbox
+          items={inboxItems()}
+          error={inboxError()}
+          index={inboxIndex()}
+          theme={theme()}
+          onPick={goToMention}
+          onMove={setInboxIndex}
+          onClose={() => setInboxOpen(false)}
         />
       </Show>
       <Show when={statusMenuOpen()}>

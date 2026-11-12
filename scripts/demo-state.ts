@@ -311,6 +311,34 @@ export function demoActions(store: Store): Actions {
       store.dispatch({ type: "gw", t: "MESSAGE_DELETE", d: { id: messageId, channel_id: channelId } });
     },
     toggleReaction: async () => {},
+    // Bandeja de menciones de la demo: los mensajes que te mencionan, el más nuevo primero.
+    mentionsInbox: async () => {
+      const state = store.getState();
+      const items = [];
+      for (const [channelId, slice] of Object.entries(state.messages)) {
+        for (const id of slice.ids) {
+          const m = slice.byId[id] as any;
+          if (!Array.isArray(m?.mentions) || !m.mentions.some((u: any) => u?.id === ME)) continue;
+          const channel = state.channels[channelId];
+          const guildId = channel?.guildId ?? null;
+          items.push({
+            messageId: id,
+            channelId,
+            guildId,
+            where: guildId ? `${state.guilds[guildId]?.name ?? "servidor"} › #${channel?.name ?? "canal"}` : "mensaje directo",
+            author: m.author?.global_name ?? m.author?.username ?? "alguien",
+            content: String(m.content ?? ""),
+            timestamp: String(m.timestamp ?? ""),
+          });
+        }
+      }
+      return items.sort((a, b) => (a.messageId < b.messageId ? 1 : -1));
+    },
+    jumpToMessage: async (channelId: string) => {
+      const guildId = store.getState().channels[channelId]?.guildId ?? null;
+      store.dispatch({ type: "ui/selectGuild", id: guildId ?? "@dms" });
+      store.dispatch({ type: "ui/selectChannel", id: channelId });
+    },
     // Quién reaccionó, inventado para la demo (la primera persona sos vos si tu reacción está puesta).
     reactionUsers: async (channelId, messageId, emoji) => {
       const message = store.getState().messages[channelId]?.byId[messageId] as any;

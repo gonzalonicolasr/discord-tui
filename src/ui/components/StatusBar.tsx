@@ -27,11 +27,15 @@ export function StatusBar(props: {
   onSettings?(): void;
   onSwitcher?(): void;
   onStatus?(): void;
+  /** Click en 🔔: la bandeja de menciones. */
+  onMentions?(): void;
 }): JSX.Element {
   const connection = useSelector(props.store, (state) => state.connection);
   const me = useSelector(props.store, (state) => state.me);
   const inputMode = useSelector(props.store, (state) => state.settings.inputMode);
   const ownStatus = useSelector(props.store, (state) => state.settings.status);
+  /** Menciones sin leer en todos lados (lo que suman los números rojos de los servidores y DMs). */
+  const mentions = useSelector(props.store, (state) => Object.values(state.readState).reduce((n, r) => n + (r?.mentionCount ?? 0), 0));
   const connColor = (): string =>
     connection() === "ready" ? props.theme.ok : connection() === "disconnected" ? props.theme.error : props.theme.warn;
 
@@ -67,6 +71,15 @@ export function StatusBar(props: {
         fallback={<text fg={props.theme.dim} wrapMode="none">{`${props.hint ?? "? ayuda · Ctrl-k saltar · q salir"} `}</text>}
       >
         <box flexDirection="row" columnGap={1} flexShrink={0}>
+          <Show when={props.onMentions}>
+            <Button
+              label={mentions() > 0 ? `🔔 ${mentions() > 99 ? "99+" : mentions()}` : "🔔 @"}
+              theme={props.theme}
+              active={mentions() > 0}
+              danger={mentions() > 0}
+              onPress={() => props.onMentions?.()}
+            />
+          </Show>
           <Button label="⌕ Ctrl-k saltar" theme={props.theme} onPress={() => props.onSwitcher?.()} />
           <Button label="⚙ settings" theme={props.theme} onPress={() => props.onSettings?.()} />
           <Button label="? ayuda" theme={props.theme} onPress={() => props.onHelp?.()} />
