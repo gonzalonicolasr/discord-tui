@@ -1,6 +1,6 @@
 import { createCliRenderer } from "@opentui/core";
 import { render } from "@opentui/solid";
-import { KITTY_KEYBOARD } from "./ui/kitty";
+import { KITTY_IMAGE_TRANSPORT, KITTY_KEYBOARD } from "./ui/kitty";
 
 import { boot } from "./app/boot";
 import { Root } from "./app/root";
@@ -47,7 +47,7 @@ async function main(): Promise<void> {
     return process.exit(1);
   }
 
-  const renderer = await createCliRenderer({ useKittyKeyboard: KITTY_KEYBOARD });
+  const renderer = await createCliRenderer({ useKittyKeyboard: KITTY_KEYBOARD, kittyImageTransport: KITTY_IMAGE_TRANSPORT });
   const kittyKeyboard = (): boolean => renderer.capabilities?.kitty_keyboard ?? true;
   renderer.setTerminalTitle(APP_NAME);
   let quitting = false;
