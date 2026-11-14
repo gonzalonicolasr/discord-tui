@@ -33,3 +33,38 @@ test("inflater keeps context across messages", async () => {
   expect(JSON.parse(inflater.push(chunks[0]!)!)).toEqual({ op: 1 });
   expect(JSON.parse(inflater.push(chunks[1]!)!)).toEqual({ op: 2 });
 });
+
+// Texto con poca repetición para que el historial comprimido crezca rápido (como un READY real de varios MB).
+function noisy(i: number, size: number): string {
+  let text = "";
+  let x = i * 2654435761;
+  while (text.length < size) {
+    x = (x * 1103515245 + 12345) >>> 0;
+    text += x.toString(36);
+  }
+  return JSON.stringify({ op: 0, s: i, d: { content: text } });
+}
+
+test("inflating a message costs the same late in the session as at the start (no re-inflating the history)", async () => {
+  const payloads = Array.from({ length: 1500 }, (_, i) => noisy(i, 400));
+  const chunks = await deflatedChunks(payloads);
+  const inflater = createZlibStreamInflater();
+  const times: number[] = [];
+  for (const chunk of chunks) {
+    const start = performance.now();
+    inflater.push(chunk);
+    times.push(performance.now() - start);
+  }
+  const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
+  const early = mean(times.slice(50, 250));
+  const late = mean(times.slice(-200));
+  expect(late).toBeLessThan(Math.max(early * 4, 0.2));
+}, 60_000);
+
+test("inflater output is identical across many messages, including ones larger than the 32 KB window", async () => {
+  const payloads = Array.from({ length: 300 }, (_, i) => (i % 50 === 7 ? noisy(i, 80_000) : noisy(i % 5, 300) + "ñandú 🎉"));
+  const chunks = await deflatedChunks(payloads);
+  const inflater = createZlibStreamInflater();
+  const out = chunks.map((chunk) => inflater.push(chunk));
+  expect(out).toEqual(payloads);
+});
