@@ -7,7 +7,7 @@ import { createGateway } from "../gateway/connection";
 import { createHttp } from "../rest/http";
 import { createRestClient } from "../rest/client";
 import { log } from "../log/logger";
-import { scheduleUpdateCheck } from "./update-check";
+import { scheduleUpdateCheck, startUpdateChecks } from "./update-check";
 import { imageCache } from "../images/cache";
 import { frameCache } from "../images/frames";
 import { avatarLoader } from "../images/avatar";
@@ -31,6 +31,8 @@ import { createSoundPlayer, type SoundPlayer } from "../sounds/player";
 export interface RuntimeDeps {
   /** false: no buscar versión nueva en GitHub (tests). */
   checkUpdates?: boolean;
+  /** Bajó a GitHub una versión nueva que bin/zcord todavía no intentó aplicar (para recargar solo si es seguro). */
+  onUpdateAvailable?: () => void;
   session: Session;
   me: { id: string; username: string };
   props: ClientProps;
@@ -205,20 +207,22 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     notifyUnauthorized();
   });
 
-  // ¿Versión nueva en GitHub? Un rato después de arrancar, sin apurar la conexión. Se instala sola al próximo inicio.
-  if (deps.checkUpdates !== false) {
-    const updateTimer = setTimeout(() => {
-      void scheduleUpdateCheck((behind) =>
-        store.dispatch({
-          type: "notice/push",
-          key: "update-available",
-          level: "warn",
-          text: `Hay una versión nueva de zcord (${behind} cambio${behind === 1 ? "" : "s"}): Ctrl+R la instala y recarga (o se instala sola la próxima vez que lo abras).`,
-        }),
-      );
-    }, 15_000);
-    (updateTimer as { unref?: () => void }).unref?.();
-  }
+  // ¿Versión nueva en GitHub? Un rato después de arrancar (sin apurar la conexión) y después cada 30 min. bin/zcord
+  // la instala al recargar (sola si es seguro, o con Ctrl+R) o al próximo inicio.
+  const stopUpdateChecks =
+    deps.checkUpdates === false
+      ? () => {}
+      : startUpdateChecks(() => {
+          void scheduleUpdateCheck((behind, isNew) => {
+            store.dispatch({
+              type: "notice/push",
+              key: "update-available",
+              level: "warn",
+              text: `Hay una versión nueva de zcord (${behind} cambio${behind === 1 ? "" : "s"}): Ctrl+R la instala y recarga (o se instala sola la próxima vez que lo abras).`,
+            });
+            if (isNew) deps.onUpdateAvailable?.();
+          });
+        });
 
   const noticeSweep = setInterval(() => {
     const now = Date.now();
@@ -261,6 +265,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       idle.activity();
     },
     async stop(): Promise<void> {
+      stopUpdateChecks();
       clearInterval(noticeSweep);
       clearInterval(memLog);
       offAck();

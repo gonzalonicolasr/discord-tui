@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { stateDir } from "../config/paths";
@@ -46,10 +46,17 @@ export async function checkForUpdate(opts: { repoDir?: string; run?: Run; env?: 
   }
 }
 
-/** Chequea en segundo plano; si hay versión nueva deja la marca para el próximo arranque y avisa. */
-export async function scheduleUpdateCheck(onAvailable: (behind: number) => void, deps: Parameters<typeof checkForUpdate>[0] & { writeFlag?: (text: string) => void } = {}): Promise<void> {
+/**
+ * Chequea en segundo plano; si hay versión nueva deja la marca para el próximo arranque y avisa. `isNew` es false
+ * si la marca ya estaba (este proceso ya avisó, o bin/zcord no la pudo aplicar al abrir): ahí no sirve recargar solo.
+ */
+export async function scheduleUpdateCheck(
+  onAvailable: (behind: number, isNew: boolean) => void,
+  deps: Parameters<typeof checkForUpdate>[0] & { writeFlag?: (text: string) => void; flagExists?: () => boolean } = {},
+): Promise<void> {
   const behind = await checkForUpdate(deps);
   if (behind === null || behind <= 0) return;
+  const isNew = !(deps.flagExists ?? (() => existsSync(updateFlagPath())))();
   try {
     (deps.writeFlag ?? ((text: string) => {
       mkdirSync(stateDir(), { recursive: true });
@@ -59,5 +66,16 @@ export async function scheduleUpdateCheck(onAvailable: (behind: number) => void,
     // sin marca: igual se avisa
   }
   log.info("update.available", { count: behind });
-  onAvailable(behind);
+  onAvailable(behind, isNew);
+}
+
+/** Primera búsqueda un rato después de arrancar (sin apurar la conexión) y después cada 30 min. Devuelve el stop. */
+export function startUpdateChecks(check: () => void, firstMs = 15_000, everyMs = 30 * 60_000): () => void {
+  let timer = setTimeout(function tick() {
+    check();
+    timer = setTimeout(tick, everyMs);
+    (timer as { unref?: () => void }).unref?.();
+  }, firstMs);
+  (timer as { unref?: () => void }).unref?.();
+  return () => clearTimeout(timer);
 }

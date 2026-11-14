@@ -98,22 +98,25 @@ async function main(): Promise<void> {
 
   const session = result.session;
   const me = result.kind === "main" ? result.me : { id: session.userId, username: "" };
+  // Código nuevo (lo que se está desarrollando, un git pull o una versión nueva en GitHub): App recarga sola cuando
+  // es seguro y bin/zcord recompila (y aplica la actualización) antes de volver a abrir.
+  const codeListeners = new Set<() => void>();
+  const codeChanged = (): void => codeListeners.forEach((listener) => listener());
+  const onCodeChange = (listener: () => void): (() => void) => {
+    codeListeners.add(listener);
+    return () => codeListeners.delete(listener);
+  };
   const runtime = createRuntime({
     session,
     me,
     props: clientProps,
     initialSettings: settings,
     kittyKeyboard,
+    onUpdateAvailable: codeChanged,
   });
   const saved = takeReloadState();
   if (saved) restoreAfterReload(runtime.store, runtime.actions as never, saved);
-  // Código nuevo (lo que se está desarrollando o un git pull): App recarga sola cuando es seguro.
-  const codeListeners = new Set<() => void>();
-  const onCodeChange = (listener: () => void): (() => void) => {
-    codeListeners.add(listener);
-    return () => codeListeners.delete(listener);
-  };
-  watchForCodeChanges(() => codeListeners.forEach((listener) => listener()));
+  watchForCodeChanges(codeChanged);
   await render(
     () => (
       <Root
