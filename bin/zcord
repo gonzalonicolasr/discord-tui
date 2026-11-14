@@ -77,8 +77,14 @@ while :; do
   if [ "${ZCORD_DEV:-}" = 1 ]; then
     set +e; bun run src/main.tsx "$@"; code=$?; set -e
   else
-    # Si no compila (src/ roto, sin red…), se abre el dist/ que ya había en vez de cerrar zcord.
-    build_if_needed || echo "No se pudo recompilar zcord; abro la versión anterior." >&2
+    # Si no compila (src/ roto, sin red…), se abre el dist/ que ya había en vez de cerrar zcord; sin dist/, no hay qué abrir.
+    if ! build_if_needed; then
+      if [ ! -f dist/src/main.js ]; then
+        echo "No se pudo compilar zcord y no hay una versión anterior para abrir (mirá el error de arriba)." >&2
+        exit 1
+      fi
+      echo "No se pudo recompilar zcord; abro la versión anterior." >&2
+    fi
     # Desde dist/: su bunfig.toml vacío evita el preload de Babel del proyecto.
     cd dist
     set +e; bun src/main.js "$@"; code=$?; set -e
