@@ -28,6 +28,8 @@ export interface RootProps {
   onQuit: (runtime: Runtime | null) => void;
   /** Ctrl+R: cerrar prolijo y volver a abrir (bin/zcord lo relanza con el código nuevo). */
   onReload?: (runtime: Runtime) => void;
+  /** Cambió el código de zcord: App recarga sola si es seguro (ver src/app/auto-reload.ts). */
+  onCodeChange?: (listener: () => void) => () => void;
   kittyKeyboard: () => boolean;
   /** Se inyecta en tests; por defecto el remote auth real. */
   auth?: RootAuth;
@@ -110,6 +112,7 @@ export function Root(props: RootProps): JSX.Element {
           actions={active().actions}
           onQuit={() => props.onQuit(active())}
           onReload={props.onReload ? () => props.onReload?.(active()) : undefined}
+          onCodeChange={props.onCodeChange}
           onActivity={() => active().activity()}
           images
           splash

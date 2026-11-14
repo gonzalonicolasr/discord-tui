@@ -107,9 +107,13 @@ async function main(): Promise<void> {
   });
   const saved = takeReloadState();
   if (saved) restoreAfterReload(runtime.store, runtime.actions as never, saved);
-  watchForCodeChanges(() =>
-    runtime.store.dispatch({ type: "notice/push", key: "code-changed", level: "warn", text: "Hay cambios en zcord: Ctrl+R para recargar sin salir." }),
-  );
+  // Código nuevo (lo que se está desarrollando o un git pull): App recarga sola cuando es seguro.
+  const codeListeners = new Set<() => void>();
+  const onCodeChange = (listener: () => void): (() => void) => {
+    codeListeners.add(listener);
+    return () => codeListeners.delete(listener);
+  };
+  watchForCodeChanges(() => codeListeners.forEach((listener) => listener()));
   await render(
     () => (
       <Root
@@ -119,6 +123,7 @@ async function main(): Promise<void> {
         initialRuntime={runtime}
         onQuit={quit}
         onReload={canReload ? reload : undefined}
+        onCodeChange={canReload ? onCodeChange : undefined}
         kittyKeyboard={kittyKeyboard}
       />
     ),

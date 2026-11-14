@@ -3,6 +3,7 @@ import { useKeyboard, usePaste, useRenderer, useTerminalDimensions, type JSX } f
 import { createEffect, createSignal, For, onCleanup, onMount, Show, untrack } from "solid-js";
 
 import type { Actions, InboxMention } from "../actions";
+import { autoReloadBlockers, createAutoReloader } from "../app/auto-reload";
 import { log } from "../log/logger";
 import { COMMON_EMOJI } from "../emoji/common";
 import { animationScheduler } from "../images/animation";
@@ -102,6 +103,8 @@ export function App(props: {
   onQuit: () => void;
   /** Ctrl+R: recargar zcord sin salir de la terminal (solo con bin/zcord). */
   onReload?: () => void;
+  /** Avisa cuando cambia el código de zcord (o bajó una actualización): si es seguro, se recarga solo. */
+  onCodeChange?: (listener: () => void) => () => void;
   settingsDeps?: SettingsDeps;
   deps?: Partial<AppDeps>;
   onActivity?(): void;
@@ -640,6 +643,46 @@ export function App(props: {
     return lost;
   }
 
+  // Recarga sola cuando cambia el código: mismo camino que Ctrl+R, pero solo si no se pierde ni se corta nada y
+  // nadie tocó zcord en los últimos segundos. Si no, avisa por qué y vuelve a probar cada tanto.
+  let lastInputAt = 0;
+  // Los clicks no pasan por useKeyboard (y muchos componentes cortan la propagación): se miran en la entrada cruda.
+  const onRawInput = (chunk: Buffer | string): void => {
+    if (/\x1b\[<\d+;\d+;\d+[Mm]/.test(chunk.toString())) lastInputAt = Date.now();
+  };
+  renderer.stdin?.on("data", onRawInput);
+  onCleanup(() => renderer.stdin?.off("data", onRawInput));
+  onMount(() => {
+    if (!props.onCodeChange || !props.onReload) return;
+    let lastWaiting = "";
+    const reloader = createAutoReloader({
+      blockers: () =>
+        autoReloadBlockers({
+          losses: reloadLosses(),
+          editing: editing() !== null || editInFlight,
+          state: props.store.getState(),
+          lastInputAt,
+          now: Date.now(),
+        }),
+      waiting: (reasons) => {
+        const text = `Hay cambios en zcord: se recarga solo cuando termines con ${reasons.join(", ")} (o Ctrl+R ya).`;
+        if (text === lastWaiting) return;
+        lastWaiting = text;
+        props.store.dispatch({ type: "notice/push", key: "code-changed", level: "warn", text });
+      },
+      reload: () => {
+        log.info("app.auto-reload", {});
+        flash("hay código nuevo: recargando zcord…");
+        props.onReload?.();
+      },
+    });
+    const off = props.onCodeChange(() => reloader.changed());
+    onCleanup(() => {
+      off();
+      reloader.stop();
+    });
+  });
+
   function closeComposer(): void {
     setReplyTo(null);
     setEditing(null);
@@ -1005,6 +1048,7 @@ export function App(props: {
   useKeyboard(
     (key) => {
       // Push-to-talk: solo Espacio; los release siempre llegan para no quedar transmitiendo.
+      lastInputAt = Date.now();
       if (key.eventType === "release") {
         if (key.name === "space") props.actions.voice?.pttKey({ name: "space", eventType: "release" });
         return;

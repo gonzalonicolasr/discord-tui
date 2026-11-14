@@ -89,8 +89,8 @@ export function restoreAfterReload(
 }
 
 /**
- * Avisa cuando cambia el código de zcord (lo que se está desarrollando o una actualización que bajó): así se
- * puede recargar con Ctrl+R en vez de salir y volver a entrar. Solo si corre desde un clon (ZCORD_HOME).
+ * Avisa cuando cambia el código de zcord (lo que se está desarrollando o una actualización que bajó): App recarga
+ * sola si es seguro (o con Ctrl+R) en vez de salir y volver a entrar. Solo si corre desde un clon (ZCORD_HOME).
  */
 export function watchForCodeChanges(onChange: () => void, repoDir = process.env.ZCORD_HOME): () => void {
   if (!repoDir || !existsSync(join(repoDir, "src"))) return () => {};
