@@ -33,6 +33,14 @@ import {
   applyRecipient,
   ensureDmForMessage,
 } from "./reducers/channels";
+import {
+  applyGuildCreate,
+  applyGuildDelete,
+  applyGuildMemberRemove,
+  applyGuildRole,
+  applyGuildUpdate,
+  applyUserGuildSettingsUpdate,
+} from "./reducers/guilds";
 import { applyThreadDelete, applyThreadListSync, applyThreadsLoaded, applyThreadUpsert, isThreadPayload } from "./reducers/threads";
 import { applyReadyVoiceStates, applySupplementalMembers, applyVoiceStateUpdate, reduceVoiceAction } from "./reducers/voice";
 
@@ -100,6 +108,20 @@ export function reduce(state: AppState, action: Action): AppState {
           return applyRecipient(state, action.t, action.d);
         case "GUILD_MEMBER_UPDATE":
           return applyGuildMemberUpdate(state, action.d);
+        case "GUILD_CREATE":
+          return applyGuildCreate(state, action.d);
+        case "GUILD_UPDATE":
+          return applyGuildUpdate(state, action.d);
+        case "GUILD_DELETE":
+          return applyGuildDelete(state, action.d);
+        case "GUILD_MEMBER_REMOVE":
+          return applyGuildMemberRemove(state, action.d);
+        case "GUILD_ROLE_CREATE":
+        case "GUILD_ROLE_UPDATE":
+        case "GUILD_ROLE_DELETE":
+          return applyGuildRole(state, action.t, action.d);
+        case "USER_GUILD_SETTINGS_UPDATE":
+          return applyUserGuildSettingsUpdate(state, action.d);
         default:
           return state;
       }

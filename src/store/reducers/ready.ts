@@ -1,5 +1,5 @@
 import { isThreadPayload, toThread } from "./threads";
-import type { AppState, ChannelState, MemberState, OverwriteState, RoleState, UserState } from "../types";
+import type { AppState, ChannelState, GuildState, MemberState, OverwriteState, PresenceState, RoleState, UserState } from "../types";
 
 
 function asList(value: unknown, idKey: string): any[] {
@@ -51,7 +51,7 @@ export function toUser(raw: any): UserState {
   };
 }
 
-function toRole(raw: any): RoleState {
+export function toRole(raw: any): RoleState {
   return {
     id: raw.id,
     name: raw.name ?? raw.id,
@@ -107,6 +107,71 @@ export function toPrivateChannel(raw: any, users: Record<string, UserState>): Ch
   };
 }
 
+function setMember(set: Set<string>, id: string, on: boolean): void {
+  if (on) set.add(id);
+  else set.delete(id);
+}
+
+export interface GuildTarget {
+  guilds: Record<string, GuildState>;
+  channels: Record<string, ChannelState>;
+  members: Record<string, Record<string, MemberState>>;
+  presences: Record<string, PresenceState>;
+  rememberUser: (raw: any) => UserState | null;
+}
+
+/** Un guild completo (de READY o GUILD_CREATE): el guild, sus miembros, presencias, canales e hilos. */
+export function absorbGuild(rawGuild: any, target: GuildTarget): void {
+  const { guilds, channels, members, presences, rememberUser } = target;
+  const properties = rawGuild.properties ?? {};
+  guilds[rawGuild.id] = {
+    id: rawGuild.id,
+    name: typeof properties.name === "string" ? properties.name : rawGuild.name ?? rawGuild.id,
+    icon: properties.icon ?? rawGuild.icon ?? null,
+    ownerId: properties.owner_id ?? rawGuild.owner_id ?? "",
+    roles: asList(rawGuild.roles, "id").map(toRole),
+    emojis: asList(rawGuild.emojis, "id").map((emoji: any) => ({
+      id: emoji.id ?? "",
+      name: emoji.name ?? "",
+      animated: emoji.animated === true,
+    })),
+  };
+
+  const guildMembers: Record<string, MemberState> = {};
+  for (const rawMember of asList(rawGuild.members, "user_id")) {
+    // En READY viene `user_id`; en GUILD_CREATE, el objeto `user`.
+    const userId = rawMember.user_id ?? rawMember.user?.id;
+    if (typeof userId !== "string") continue;
+    guildMembers[userId] = {
+      userId,
+      guildId: rawGuild.id,
+      roles: Array.isArray(rawMember.roles) ? rawMember.roles : [],
+      nick: rawMember.nick ?? null,
+      ...memberAvatar(rawMember),
+    };
+    if (rawMember.user) rememberUser(rawMember.user);
+  }
+  members[rawGuild.id] = guildMembers;
+
+  for (const rawPresence of asList(rawGuild.presences, "user_id")) {
+    presences[rawPresence.user_id] = {
+      status: rawPresence.status ?? "offline",
+      activities: Array.isArray(rawPresence.activities) ? rawPresence.activities : [],
+    };
+  }
+
+  for (const rawChannel of asList(rawGuild.channels, "id")) {
+    if (typeof rawChannel.id !== "string") continue;
+    const thread = isThreadPayload(rawChannel) ? toThread(rawChannel, rawGuild.id) : null;
+    channels[rawChannel.id] = thread ?? toChannel(rawChannel, rawGuild.id);
+  }
+  // Hilos activos que el usuario ve (en cuentas de usuario: los que sigue; el resto llega en THREAD_LIST_SYNC).
+  for (const rawThread of asList(rawGuild.threads, "id")) {
+    const thread = toThread(rawThread, rawGuild.id);
+    if (thread) channels[thread.id] = thread;
+  }
+}
+
 export function applyReady(state: AppState, d: any): AppState {
   const users: Record<string, UserState> = { ...state.users };
   const rememberUser = (raw: any): UserState | null => {
@@ -126,50 +191,7 @@ export function applyReady(state: AppState, d: any): AppState {
 
   for (const rawGuild of asList(d.guilds, "id")) {
     guildOrder.push(rawGuild.id);
-    const properties = rawGuild.properties ?? {};
-    guilds[rawGuild.id] = {
-      id: rawGuild.id,
-      name: typeof properties.name === "string" ? properties.name : rawGuild.name ?? rawGuild.id,
-      icon: properties.icon ?? rawGuild.icon ?? null,
-      ownerId: properties.owner_id ?? rawGuild.owner_id ?? "",
-      roles: asList(rawGuild.roles, "id").map(toRole),
-      emojis: asList(rawGuild.emojis, "id").map((emoji: any) => ({
-        id: emoji.id ?? "",
-        name: emoji.name ?? "",
-        animated: emoji.animated === true,
-      })),
-    };
-
-    const guildMembers: Record<string, MemberState> = {};
-    for (const rawMember of asList(rawGuild.members, "user_id")) {
-      guildMembers[rawMember.user_id] = {
-        userId: rawMember.user_id,
-        guildId: rawGuild.id,
-        roles: Array.isArray(rawMember.roles) ? rawMember.roles : [],
-        nick: rawMember.nick ?? null,
-        ...memberAvatar(rawMember),
-      };
-      if (rawMember.user) rememberUser(rawMember.user);
-    }
-    members[rawGuild.id] = guildMembers;
-
-    for (const rawPresence of asList(rawGuild.presences, "user_id")) {
-      presences[rawPresence.user_id] = {
-        status: rawPresence.status ?? "offline",
-        activities: Array.isArray(rawPresence.activities) ? rawPresence.activities : [],
-      };
-    }
-
-    for (const rawChannel of asList(rawGuild.channels, "id")) {
-      if (typeof rawChannel.id !== "string") continue;
-      const thread = isThreadPayload(rawChannel) ? toThread(rawChannel, rawGuild.id) : null;
-      channels[rawChannel.id] = thread ?? toChannel(rawChannel, rawGuild.id);
-    }
-    // Hilos activos que el usuario ve (en cuentas de usuario: los que sigue; el resto llega en THREAD_LIST_SYNC).
-    for (const rawThread of asList(rawGuild.threads, "id")) {
-      const thread = toThread(rawThread, rawGuild.id);
-      if (thread) channels[thread.id] = thread;
-    }
+    absorbGuild(rawGuild, { guilds, channels, members, presences, rememberUser });
   }
 
   // Con DEDUPE_USER_OBJECTS (1<<4) los miembros llegan colapsados en `merged_members[i]` por guild y
@@ -211,16 +233,15 @@ export function applyReady(state: AppState, d: any): AppState {
     };
   }
 
-  const mutedGuilds = [...state.guildSettings.mutedGuilds];
-  const mutedChannels = [...state.guildSettings.mutedChannels];
+  // Un READY trae los silencios completos: reemplazan a los de la sesión anterior (si no, nunca se des-silencia
+  // nada). Una estructura versionada `partial` trae solo lo que cambió; sin el campo, se queda lo que había.
+  const keep = d.user_guild_settings === undefined || d.user_guild_settings?.partial === true;
+  const mutedGuilds = new Set(keep ? state.guildSettings.mutedGuilds : []);
+  const mutedChannels = new Set(keep ? state.guildSettings.mutedChannels : []);
   for (const raw of entriesOf(d.user_guild_settings, "guild_id")) {
-    if (raw.muted === true && typeof raw.guild_id === "string" && !mutedGuilds.includes(raw.guild_id)) {
-      mutedGuilds.push(raw.guild_id);
-    }
+    if (typeof raw.guild_id === "string") setMember(mutedGuilds, raw.guild_id, raw.muted === true);
     for (const override of entriesOf(raw.channel_overrides, "channel_id")) {
-      if (override.muted === true && typeof override.channel_id === "string" && !mutedChannels.includes(override.channel_id)) {
-        mutedChannels.push(override.channel_id);
-      }
+      if (typeof override.channel_id === "string") setMember(mutedChannels, override.channel_id, override.muted === true);
     }
   }
 
@@ -236,7 +257,7 @@ export function applyReady(state: AppState, d: any): AppState {
     users,
     members,
     readState,
-    guildSettings: { mutedGuilds, mutedChannels },
+    guildSettings: { mutedGuilds: [...mutedGuilds], mutedChannels: [...mutedChannels] },
     presences,
   };
 }
