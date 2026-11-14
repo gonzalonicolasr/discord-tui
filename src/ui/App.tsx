@@ -976,6 +976,9 @@ export function App(props: {
   usePaste((event: PasteEvent) => {
     const text = new TextDecoder().decode(event.bytes);
     log.info("ui.paste", { count: event.bytes.byteLength });
+    // Con un modal abierto (ayuda, menciones, emoji, settings, menús) el pegado no va al composer escondido detrás.
+    const modalOpen = helpOpen() || inboxOpen() || pickerOpen() || confirmDelete() !== null || settingsOpen() || statusMenuOpen();
+    if (modalOpen || monitorChoices() !== null || outputChoices() !== null) return;
     // Pegado de la terminal (Ctrl+Shift+V): si son rutas de archivos se adjuntan; si viene vacío (la terminal
     // no puede pegar imágenes como texto) se mira si el portapapeles tiene una imagen.
     if (attachPrompt() === null && !switcherOpen() && isTextChannel()) {
