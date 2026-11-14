@@ -13,17 +13,22 @@ export ZCORD_HOME="$here"
 flag="${XDG_STATE_HOME:-$HOME/.local/state}/discord-tui/update-available"
 
 # Trae lo último y recompila (solo en un clon: install.sh o git clone). Devuelve 0 si quedó al día.
+# Si el pull trajo código pero bun install o el build fallan, quedan la marca y "$pending": el próximo intento
+# reinstala aunque el pull ya no traiga nada.
+pending="$flag.install"
 update_zcord() {
   [ -d .git ] && [ -w . ] || return 2
   local before after
   before="$(git rev-parse --short HEAD)"
   git pull --ff-only --quiet || return 1
   after="$(git rev-parse --short HEAD)"
-  if [ "$before" = "$after" ]; then
+  if [ "$before" = "$after" ] && [ ! -f "$pending" ]; then
     echo "zcord ya está en lo último ($after)."
   else
+    mkdir -p "$(dirname "$flag")" && touch "$flag" "$pending"
     bun install --frozen-lockfile >/dev/null || return 1
     bun scripts/build.ts >/dev/null || return 1
+    rm -f "$pending"
     echo "✓ zcord actualizado: $before → $after"
   fi
   rm -f "$flag"
@@ -72,7 +77,8 @@ while :; do
   if [ "${ZCORD_DEV:-}" = 1 ]; then
     set +e; bun run src/main.tsx "$@"; code=$?; set -e
   else
-    build_if_needed
+    # Si no compila (src/ roto, sin red…), se abre el dist/ que ya había en vez de cerrar zcord.
+    build_if_needed || echo "No se pudo recompilar zcord; abro la versión anterior." >&2
     # Desde dist/: su bunfig.toml vacío evita el preload de Babel del proyecto.
     cd dist
     set +e; bun src/main.js "$@"; code=$?; set -e
