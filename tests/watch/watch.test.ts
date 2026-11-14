@@ -19,7 +19,7 @@ const KEY = `guild:${GUILD}:${VOICE_A}:${RAGNAR}`;
 const IDR = new Uint8Array([0, 0, 0, 1, 0x65, 1, 2]);
 const P = new Uint8Array([0, 0, 0, 1, 0x41, 1, 2]);
 
-function setup(opts: { inVoice?: boolean; streaming?: boolean; decodeMs?: number } = {}) {
+function setup(opts: { inVoice?: boolean; streaming?: boolean; decodeMs?: number; openDecoder?: () => Promise<void> } = {}) {
   const store = createStore(emptyState());
   store.dispatch({
     type: "gw",
@@ -47,6 +47,7 @@ function setup(opts: { inVoice?: boolean; streaming?: boolean; decodeMs?: number
     },
     createDecoder: async (): Promise<H264Decoder> => {
       decoders++;
+      await opts.openDecoder?.();
       return {
         async decode(au, want) {
           decoded.push({ au, want });
@@ -278,6 +279,34 @@ describe("decoding", () => {
     await flush();
     expect(conn.keyframes).toBeGreaterThan(2); // se reintenta el PLI cada KEYFRAME_RETRY cuadros
     expect(s.decoded).toHaveLength(1); // sin decoder no se sigue con cuadros P: solo con keyframe
+    await s.watcher.stop();
+  });
+
+  test("a decoder that finishes opening after the watch stopped is closed, and its failure doesn't stop a newer watch", async () => {
+    const gates: Array<{ resolve: () => void; reject: (e: Error) => void }> = [];
+    const s = setup({ openDecoder: () => new Promise<void>((resolve, reject) => gates.push({ resolve, reject })) });
+    const startWatching = async () => {
+      await s.watcher.watch(RAGNAR);
+      s.discordAnswers();
+      await flush();
+      s.conns.at(-1)!.events.onFrame(IDR);
+      await flush();
+    };
+    s.watcher.subscribe(640, 360, () => {});
+    await startWatching();
+    expect(s.decoders()).toBe(1);
+    await s.watcher.stop(); // mientras el decoder todavía abre
+    gates[0]!.resolve();
+    await flush();
+    expect(s.closed()).toBe(1);
+
+    await startWatching();
+    await s.watcher.stop();
+    await startWatching(); // un watch nuevo; el decoder del anterior falla tarde
+    gates[1]!.reject(new Error("open2 failed"));
+    await flush();
+    expect(s.watch().status).toBe("watching");
+    expect(s.notices()).not.toContain(WATCH_ERRORS.decoderFailed);
     await s.watcher.stop();
   });
 

@@ -209,17 +209,24 @@ export function createStreamWatcher(deps: {
 
   function ensureDecoder(): Promise<H264Decoder | null> {
     if (decoder) return Promise.resolve(decoder);
-    decoderOpening ??= makeDecoder(box.width, box.height).then(
+    if (decoderOpening) return decoderOpening;
+    // Si se cerró (closeDecoder) mientras abría, esta apertura ya no es la vigente: se descarta.
+    const opening: Promise<H264Decoder | null> = makeDecoder(box.width, box.height).then(
       (d) => {
+        if (decoderOpening !== opening) {
+          d.close();
+          return null;
+        }
         decoder = d;
         return d;
       },
       () => {
-        if (active) finish(active, { text: WATCH_ERRORS.decoderFailed, level: "error" });
+        if (decoderOpening === opening && active) finish(active, { text: WATCH_ERRORS.decoderFailed, level: "error" });
         return null;
       },
     );
-    return decoderOpening;
+    decoderOpening = opening;
+    return opening;
   }
 
   async function connectWhenReady(a: Active): Promise<void> {
