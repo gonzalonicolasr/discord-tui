@@ -261,6 +261,26 @@ describe("decoding", () => {
     expect(s.decoded).toHaveLength(3);
   });
 
+  test("showing the view again without a decoder keeps asking for a keyframe while P frames arrive", async () => {
+    const s = setup();
+    await s.watcher.watch(RAGNAR);
+    s.discordAnswers();
+    await flush();
+    const conn = s.conns[0]!;
+    const first = s.watcher.subscribe(640, 360, () => {});
+    conn.events.onFrame(IDR);
+    await flush();
+    first.unsubscribe(); // cierra el decoder
+    await flush();
+    s.watcher.subscribe(640, 360, () => {});
+    expect(conn.keyframes).toBe(2);
+    for (let i = 0; i < 200; i++) conn.events.onFrame(P);
+    await flush();
+    expect(conn.keyframes).toBeGreaterThan(2); // se reintenta el PLI cada KEYFRAME_RETRY cuadros
+    expect(s.decoded).toHaveLength(1); // sin decoder no se sigue con cuadros P: solo con keyframe
+    await s.watcher.stop();
+  });
+
   test("a decoder that can't keep up drops the queue and asks for a keyframe", async () => {
     const s = setup({ decodeMs: 20 });
     await s.watcher.watch(RAGNAR);

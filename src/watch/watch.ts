@@ -174,8 +174,9 @@ export function createStreamWatcher(deps: {
     }
     if (skipUntilKeyframe) {
       // Después de tirar la cola: si el keyframe pedido no llega, se sigue igual (ver KEYFRAME_PATIENCE).
-      if (!hasIdr(au) && !(decoder && ++skippedSinceDrop >= KEYFRAME_PATIENCE)) {
-        if (skippedSinceDrop > 0 && skippedSinceDrop % KEYFRAME_RETRY === 0) a.conn?.requestKeyframe();
+      // Sin decoder (vista recién vuelta) no hay de dónde seguir con P: solo se reintenta el keyframe.
+      if (!hasIdr(au) && !(++skippedSinceDrop >= KEYFRAME_PATIENCE && decoder)) {
+        if (skippedSinceDrop % KEYFRAME_RETRY === 0) a.conn?.requestKeyframe();
         return;
       }
       skipUntilKeyframe = false;
