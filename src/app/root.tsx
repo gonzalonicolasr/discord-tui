@@ -34,7 +34,7 @@ export interface RootProps {
   kittyKeyboard: () => boolean;
   /** Se inyecta en tests; por defecto el remote auth real. */
   auth?: RootAuth;
-  /** Se inyecta en tests; por defecto `process` (SIGHUP/SIGTERM/SIGINT salen por onQuit). */
+  /** Se inyecta en tests; por defecto `process` (SIGHUP/SIGTERM/SIGINT/SIGQUIT salen por onQuit). */
   signals?: SignalTarget;
 }
 

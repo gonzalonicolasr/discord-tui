@@ -4,7 +4,7 @@
  */
 export const RENDERER_EXIT_OPTIONS = { exitSignals: [] as NodeJS.Signals[], exitOnCtrlC: false };
 
-export const EXIT_SIGNALS = ["SIGHUP", "SIGTERM", "SIGINT"] as const;
+export const EXIT_SIGNALS = ["SIGHUP", "SIGTERM", "SIGINT", "SIGQUIT"] as const;
 
 /** Lo mínimo de `process` que hace falta (inyectable en tests). */
 export interface SignalTarget {

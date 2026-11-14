@@ -63,7 +63,7 @@ test("OpenTUI no maneja señales ni Ctrl+C: solo destruiría la UI y dejaría el
   expect(RENDERER_EXIT_OPTIONS.exitOnCtrlC).toBe(false);
 });
 
-for (const signal of ["SIGHUP", "SIGTERM", "SIGINT"] as const) {
+for (const signal of ["SIGHUP", "SIGTERM", "SIGINT", "SIGQUIT"] as const) {
   test(`${signal} sale por onQuit con el runtime activo`, async () => {
     const runtime = fakeRuntime();
     const { signals, quits } = await mount(runtime);
