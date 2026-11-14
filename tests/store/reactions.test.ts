@@ -33,9 +33,7 @@ test("reaction add/remove update count and me", () => {
     t: "MESSAGE_REACTION_REMOVE",
     d: { user_id: "100000000000000010", channel_id: CH, message_id: "100000000000000100", emoji: { id: null, name: "👍" } },
   });
-  expect(s.messages[CH]!.byId["100000000000000100"]!.reactions).toMatchObject([
-    { emoji: { id: null, name: "👍" }, count: 0, me: false },
-  ]);
+  expect(s.messages[CH]!.byId["100000000000000100"]!.reactions).toEqual([]);
 
   s = reduce(s, {
     type: "gw",
@@ -43,4 +41,19 @@ test("reaction add/remove update count and me", () => {
     d: { channel_id: CH, message_id: "100000000000000100" },
   });
   expect(s.messages[CH]!.byId["100000000000000100"]!.reactions).toMatchObject([]);
+});
+
+test("removing the last reaction of an emoji drops its chip; removing one of two keeps it", () => {
+  let s = state();
+  const ev = (t: string, userId: string) => ({
+    type: "gw" as const,
+    t,
+    d: { user_id: userId, channel_id: CH, message_id: "100000000000000100", emoji: { id: null, name: "👍" } },
+  });
+  s = reduce(s, ev("MESSAGE_REACTION_ADD", "7"));
+  s = reduce(s, ev("MESSAGE_REACTION_ADD", "8"));
+  s = reduce(s, ev("MESSAGE_REACTION_REMOVE", "7"));
+  expect(s.messages[CH]!.byId["100000000000000100"]!.reactions).toMatchObject([{ emoji: { name: "👍" }, count: 1 }]);
+  s = reduce(s, ev("MESSAGE_REACTION_REMOVE", "8"));
+  expect(s.messages[CH]!.byId["100000000000000100"]!.reactions).toEqual([]);
 });

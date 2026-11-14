@@ -34,6 +34,8 @@ export function applyReaction(state: AppState, t: string, d: any): AppState {
         reactions = reactions.map((item, i) =>
           i === index ? { ...item, count: Math.max(0, (item.count ?? 1) - 1), me: d.user_id === me ? false : item.me } : item,
         );
+        // Sin nadie que reaccione no queda un chip con 0.
+        reactions = reactions.filter((item: any) => (item.count ?? 0) > 0);
       }
     }
   }
