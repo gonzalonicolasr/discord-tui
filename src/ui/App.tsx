@@ -1,6 +1,6 @@
 import type { KeyEvent, PasteEvent } from "@opentui/core";
 import { useKeyboard, usePaste, useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid";
-import { createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createSignal, For, onCleanup, onMount, Show, untrack } from "solid-js";
 
 import type { Actions, InboxMention } from "../actions";
 import { log } from "../log/logger";
@@ -648,6 +648,25 @@ export function App(props: {
     setInsert(false);
     setMentionClosed(false);
   }
+
+  // Cambiar de canal (click, quick switcher, una mención…) cancela la edición: el mensaje es del canal anterior.
+  // El texto de la edición se descarta (como con Esc); el borrador del canal nuevo queda intacto.
+  const selectedChannel = useSelector(props.store, (state) => state.ui.selectedChannelId);
+  let previousChannel = selectedChannel();
+  createEffect(() => {
+    const now = selectedChannel();
+    const before = previousChannel;
+    previousChannel = now;
+    if (now === before || untrack(editing) === null) return;
+    setEditing(null);
+    setEditAttachments(null);
+    editAttachmentsChanged.value = false;
+    if (before !== null) {
+      setDrafts((previous) => ({ ...previous, [before]: "" }));
+      setMentions((previous) => ({ ...previous, [before]: [] }));
+      setCursors((previous) => ({ ...previous, [before]: 0 }));
+    }
+  });
 
   function clearComposer(): void {
     const id = channelId();
