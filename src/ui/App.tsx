@@ -709,9 +709,12 @@ export function App(props: {
       try {
         await props.actions.edit(id, editId, content, changed ? (kept ?? []).map((a) => a.id) : undefined);
       } catch {
-        // Falló: si el cuadro sigue vacío en ese canal, vuelve la edición tal cual; si ya escribiste otra cosa,
-        // no se pisa y el texto de la edición queda en el portapapeles.
-        if (channelId() === id && editing() === null && currentText().length === 0 && currentAttachments().length === 0) {
+        // Falló: los adjuntos que esperaban en el canal (clearComposer los vació) vuelven siempre. Si el cuadro sigue
+        // vacío en ese canal, vuelve la edición tal cual; si ya escribiste otra cosa, no se pisa y el texto de la
+        // edición queda en el portapapeles.
+        const untouched = channelId() === id && editing() === null && currentText().length === 0 && currentAttachments().length === 0;
+        if (files.length > 0) setAttachments((previous) => ({ ...previous, [id]: [...files, ...(previous[id] ?? [])] }));
+        if (untouched) {
           setEditing(editId);
           setEditAttachments(kept);
           editAttachmentsChanged.value = changed;

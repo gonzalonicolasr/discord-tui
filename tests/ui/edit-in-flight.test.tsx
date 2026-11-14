@@ -7,7 +7,7 @@ import { buildDemoStore, demoActions, DEMO } from "../../scripts/demo-state";
 const MSG = "930000000000009300";
 
 /** edit() queda pendiente hasta que el test lo resuelve o lo rechaza. */
-async function setup() {
+async function setup(opts: { clipboardImage?: boolean } = {}) {
   const store = buildDemoStore();
   store.dispatch({
     type: "gw",
@@ -27,13 +27,17 @@ async function setup() {
   };
   const deps = {
     readClipboardFiles: async () => [],
-    readClipboardImage: async () => null,
+    readClipboardImage: async () => (opts.clipboardImage ? { bytes: new Uint8Array(3), mime: "image/png", filename: "x.png" } : null),
     readClipboardText: async () => null,
     writeClipboardText: async (text: string) => (copied.push(text), true),
   };
-  const h = await testRender(() => <App store={store} actions={actions} onQuit={() => {}} deps={deps as never} />, { width: 160, height: 45 });
+  let reloads = 0;
+  const h = await testRender(
+    () => <App store={store} actions={actions} onQuit={() => {}} onReload={() => void (reloads += 1)} deps={deps as never} />,
+    { width: 160, height: 45 },
+  );
   await h.renderOnce();
-  return { store, h, edits, pending, copied };
+  return { store, h, edits, pending, copied, reloads: () => reloads };
 }
 
 function composer(frame: string): string {
@@ -105,4 +109,25 @@ test("if the PATCH fails after typing something else, that text stays and the ed
   expect(frame).not.toContain("╭─ editando");
   expect(composer(frame)).toContain("otro");
   expect(copied).toEqual(["mirá!"]);
+});
+
+test("if the PATCH fails, the channel's pending attachments are still there", async () => {
+  const { h, pending, reloads } = await setup({ clipboardImage: true });
+  h.mockInput.pressKey("v", { ctrl: true }); // queda 1 adjunto pendiente en #general
+  await Bun.sleep(10);
+  h.mockInput.pressEscape();
+  await Bun.sleep(30);
+  h.mockInput.pressKey("k");
+  h.mockInput.pressKey("e");
+  await h.mockInput.typeText("!");
+  h.mockInput.pressEnter();
+  pending[0]!.reject(new Error("500"));
+  await Bun.sleep(10);
+  await h.renderOnce();
+  expect(h.captureCharFrame()).toContain("╭─ editando");
+  // Ctrl+R cuenta lo que se perdería: el adjunto pendiente sigue ahí.
+  h.mockInput.pressKey("r", { ctrl: true });
+  await h.renderOnce();
+  expect(reloads()).toBe(0);
+  expect(h.captureCharFrame()).toContain("1 adjunto");
 });
