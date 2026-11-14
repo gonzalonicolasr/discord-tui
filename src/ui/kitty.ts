@@ -27,8 +27,12 @@ interface TransportSource {
   readonly isDestroyed?: boolean;
 }
 
-/** Variables que hacen que OpenTUI no use el archivo (sesión remota, multiplexor) o lo escriba en otro lado. Solo si están, nunca su valor. */
-const TRANSPORT_ENV = ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY", "MOSH_CONNECTION", "TMUX", "ZELLIJ", "STY", "TMPDIR"] as const;
+/**
+ * Variables que hacen que OpenTUI no use el archivo (sesión remota, multiplexor) o lo escriba en otro lado, y dónde
+ * corre: `HC_TERMINAL_SOCKET` es una terminal de herdr-core (`hc`), que no contesta las consultas de gráficos si no
+ * hay un cliente que las reenvíe; `HERDR_PANE_ID`, un pane del server de herdr. Solo si están, nunca su valor.
+ */
+const TRANSPORT_ENV = ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY", "MOSH_CONNECTION", "TMUX", "ZELLIJ", "STY", "TMPDIR", "HC_TERMINAL_SOCKET", "HERDR_PANE_ID"] as const;
 
 /**
  * Diagnóstico del transporte de imágenes de kitty (`file` o `raw`) en el log, sin datos sensibles: al arrancar, cada
@@ -50,14 +54,19 @@ export function logKittyTransport(
   };
   let last = snapshot();
   logger.info("kitty.transport", { state: "start", msg: last.msg });
+  // Con la sesión nativa cerrándose, leer el estado tira: el diagnóstico nunca tiene que romper la salida.
   const poll = setInterval(() => {
-    if (renderer.isDestroyed) return;
-    const now = snapshot();
-    if (now.key !== last.key) logger.info("kitty.transport", { state: "change", msg: now.msg });
-    last = now;
+    try {
+      if (renderer.isDestroyed) return;
+      const now = snapshot();
+      if (now.key !== last.key) logger.info("kitty.transport", { state: "change", msg: now.msg });
+      last = now;
+    } catch {}
   }, opts.everyMs ?? 1_000);
   const periodic = setInterval(() => {
-    if (!renderer.isDestroyed) logger.info("kitty.transport", { state: "periodic", msg: snapshot().msg });
+    try {
+      if (!renderer.isDestroyed) logger.info("kitty.transport", { state: "periodic", msg: snapshot().msg });
+    } catch {}
   }, opts.periodicMs ?? 60_000);
   (poll as { unref?: () => void }).unref?.();
   (periodic as { unref?: () => void }).unref?.();
