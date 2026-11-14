@@ -12,6 +12,7 @@ import type { Settings } from "../settings/settings";
 import { App } from "../ui/App";
 import { LoginScreen } from "../ui/screens/LoginScreen";
 import { createRuntime, type Runtime } from "./runtime";
+import { onExitSignals, type SignalTarget } from "./signals";
 
 /** Mínimo de remote auth que usan Root y LoginScreen (inyectable en tests). */
 export interface RootAuth {
@@ -33,6 +34,8 @@ export interface RootProps {
   kittyKeyboard: () => boolean;
   /** Se inyecta en tests; por defecto el remote auth real. */
   auth?: RootAuth;
+  /** Se inyecta en tests; por defecto `process` (SIGHUP/SIGTERM/SIGINT salen por onQuit). */
+  signals?: SignalTarget;
 }
 
 /**
@@ -100,7 +103,11 @@ export function Root(props: RootProps): JSX.Element {
     }
   }
 
+  // Cerrar la terminal, un kill o Ctrl+C salen igual que q: se sale de voz y se cierra el gateway antes de terminar.
+  onMount(() => onCleanup(onExitSignals(() => props.onQuit(runtime()), props.signals)));
+
   useKeyboard((key) => {
+    if (key.ctrl && key.name === "c" && !key.meta) return props.onQuit(runtime());
     if (runtime() === null && key.name === "q" && !key.ctrl && !key.meta) props.onQuit(null);
   });
 

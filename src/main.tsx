@@ -18,6 +18,7 @@ import { themesDir } from "./config/paths";
 import { registerThemes } from "./ui/theme";
 import { loadUserThemes } from "./ui/theme-files";
 import { APP_NAME } from "./ui/brand";
+import { RENDERER_EXIT_OPTIONS } from "./app/signals";
 
 export function assertTty(stream: { isTTY?: boolean }): string | null {
   return stream.isTTY ? null : "zcord necesita una terminal";
@@ -49,7 +50,7 @@ async function main(): Promise<void> {
     return process.exit(1);
   }
 
-  const renderer = await createCliRenderer({ useKittyKeyboard: KITTY_KEYBOARD, kittyImageTransport: KITTY_IMAGE_TRANSPORT });
+  const renderer = await createCliRenderer({ ...RENDERER_EXIT_OPTIONS, useKittyKeyboard: KITTY_KEYBOARD, kittyImageTransport: KITTY_IMAGE_TRANSPORT });
   logKittyTransport(renderer, log);
   const kittyKeyboard = (): boolean => renderer.capabilities?.kitty_keyboard ?? true;
   renderer.setTerminalTitle(APP_NAME);
