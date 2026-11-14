@@ -78,7 +78,19 @@ export function createHttp(deps: HttpDeps): Http {
         }
       }
 
-      const text = await response.text().catch(() => "");
+      let text: string;
+      try {
+        text = await response.text();
+      } catch (error) {
+        // Con un error HTTP alcanza con el status; un 200 con el cuerpo cortado no es un éxito vacío.
+        if (!response.ok) text = "";
+        else {
+          const fields: LogFields = { method, route, status: response.status };
+          if (error instanceof Error) fields.error_name = error.name;
+          log.error("http.network", fields);
+          throw new NetworkError(method, route, { cause: error });
+        }
+      }
       let data: unknown = null;
       if (text) {
         try {

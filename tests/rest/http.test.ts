@@ -221,3 +221,15 @@ test("429 without a numeric retry-after falls back to 1 second", async () => {
     fake.stop();
   }
 });
+
+test("a 200 whose body fails to read throws NetworkError instead of returning null", async () => {
+  const http = createHttp({
+    props: createClientProps({ buildNumber: 1 }),
+    baseUrl: "https://discord.com",
+    fetch: (async () => {
+      const body = new ReadableStream<Uint8Array>({ pull: (c) => c.error(new Error("connection reset")) });
+      return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch,
+  });
+  await expect(http.request("GET", "/users/@me/channels")).rejects.toBeInstanceOf(NetworkError);
+});
