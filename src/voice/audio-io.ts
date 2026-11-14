@@ -1,3 +1,4 @@
+import { log } from "../log/logger";
 import { cleanEnv } from "../proc/spawn";
 import { createFramer } from "./pcm-framer";
 
@@ -78,11 +79,25 @@ export async function startCapture(opts?: { target?: string; spawn?: SpawnLike }
     if (!stdout) return;
     const reader = stdout.getReader();
     for (;;) {
-      const { done, value } = await reader.read();
+      let chunk: Awaited<ReturnType<typeof reader.read>>;
+      try {
+        chunk = await reader.read();
+      } catch (error) {
+        log.warn("voice.capture-read-failed", { error_name: error instanceof Error ? error.name : "error" });
+        break;
+      }
+      const { done, value } = chunk;
       if (done) break;
       if (!value) continue;
       for (const frame of framer.push(value)) {
-        for (const listener of listeners) listener(frame);
+        for (const listener of listeners) {
+          // Un oyente que tira (p. ej. el encoder con un cuadro raro) no corta el micrófono de los demás.
+          try {
+            listener(frame);
+          } catch (error) {
+            log.warn("voice.capture-listener-failed", { error_name: error instanceof Error ? error.name : "error" });
+          }
+        }
       }
     }
   })();

@@ -127,6 +127,45 @@ describe("startCapture", () => {
     await expect(startCapture({ spawn })).rejects.toThrow(/no pude abrir el micrófono \(pw-record: ENOENT\)/);
   });
 
+  test("a listener that throws doesn't kill the mic: the other listeners keep getting frames", async () => {
+    const fake = fakeSpawn();
+    const capture = await startCapture({ spawn: fake.spawn });
+    const frames: Uint8Array[] = [];
+    capture.onFrame(() => {
+      throw new Error("opus encoder choked");
+    });
+    capture.onFrame((frame) => frames.push(frame));
+    fake.calls[0]!.emit(new Uint8Array(FRAME_BYTES));
+    await Bun.sleep(1);
+    fake.calls[0]!.emit(new Uint8Array(FRAME_BYTES));
+    await Bun.sleep(1);
+    expect(frames).toHaveLength(2);
+    await capture.stop();
+  });
+
+  test("a mic read that fails never leaves an unhandled rejection", async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => void unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      let exit: (code: number) => void = () => {};
+      const spawn: SpawnLike = () => ({
+        stdin: null,
+        stdout: new ReadableStream<Uint8Array>({ pull: (c) => c.error(new Error("EIO")) }),
+        stderr: null,
+        exited: new Promise<number>((resolve) => (exit = resolve)),
+        killed: false,
+        kill: () => exit(0),
+      });
+      const capture = await startCapture({ spawn });
+      await Bun.sleep(5);
+      await capture.stop();
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
   test("stop kills the process and resolves", async () => {
     const fake = fakeSpawn();
     const capture = await startCapture({ spawn: fake.spawn });
