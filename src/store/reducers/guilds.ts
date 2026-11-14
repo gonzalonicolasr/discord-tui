@@ -19,6 +19,10 @@ export function applyGuildCreate(state: AppState, d: any): AppState {
       return (users[raw.id] = toUser(raw));
     },
   });
+  // Un servidor que ya estaba (vuelve de una caída) puede traer pocos miembros o ninguno: se mezclan con los que
+  // ya había (roles, apodos, avatares) en vez de pisarlos. Las presencias ya se escriben de a una.
+  const known = state.members[d.id];
+  if (known) members[d.id] = { ...known, ...members[d.id] };
   const guildOrder = state.guildOrder.includes(d.id) ? state.guildOrder : [...state.guildOrder, d.id];
   return { ...state, users, guilds, guildOrder, channels, members, presences };
 }

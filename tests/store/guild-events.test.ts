@@ -131,3 +131,22 @@ test("a new READY replaces the mutes instead of adding to the old ones", () => {
   store.dispatch({ type: "gw", t: "READY", d });
   expect(store.getState().guildSettings).toEqual({ mutedGuilds: [], mutedChannels: [] });
 });
+
+test("GUILD_CREATE of a guild already known (back from an outage) merges members and presences instead of wiping them", () => {
+  const store = ready();
+  expect(store.getState().members[G]?.[ME]?.nick).toBe("yo");
+  store.dispatch({
+    type: "gw",
+    t: "GUILD_CREATE",
+    d: {
+      ...newGuild(G),
+      members: [{ user: { id: "100000000000000011", username: "user2" }, roles: [], nick: "dos" }],
+      presences: [{ user: { id: "100000000000000011" }, user_id: "100000000000000011", status: "online", activities: [] }],
+    },
+  });
+  store.dispatch({ type: "gw", t: "GUILD_CREATE", d: { ...newGuild(G), members: [], presences: [] } });
+  const s = store.getState();
+  expect(s.members[G]?.[ME]?.nick).toBe("yo");
+  expect(s.members[G]?.["100000000000000011"]?.nick).toBe("dos");
+  expect(s.presences["100000000000000011"]?.status).toBe("online");
+});
