@@ -45,7 +45,9 @@ function withLastMessage(state: AppState, channelId: string, messageId: string):
 
 function appendMessage(state: AppState, raw: ApiMessage): AppState {
   const channelId = raw.channel_id;
-  const slice = state.messages[channelId] ?? emptySlice();
+  // Un canal que nunca abriste: el slice tiene solo lo que llegó en vivo, sin historial. Queda `stale` para que
+  // openChannel lo pida igual.
+  const slice = state.messages[channelId] ?? { ...emptySlice(), stale: true };
   if (slice.byId[raw.id]) return state;
 
   const ids = [...slice.ids, raw.id].sort(compareSnowflakes);

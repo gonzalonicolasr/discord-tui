@@ -114,6 +114,7 @@ export interface MessageSlice {
   byId: Record<string, ApiMessage>;
   hasMoreBefore: boolean;
   loadingOlder: boolean;
+  /** No refleja el historial del servidor (sesión nueva o creado por un MESSAGE_CREATE): openChannel lo vuelve a pedir. */
   stale: boolean;
 }
 
