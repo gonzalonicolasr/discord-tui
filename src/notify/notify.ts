@@ -30,7 +30,7 @@ export function notificationTitle(state: AppState, message: Message): string {
 export function notify(title: string, body: string, deps?: { spawn?: typeof spawnClean }): void {
   const spawn = deps?.spawn ?? spawnClean;
   try {
-    const child = spawn(["notify-send", "-a", "zcord", title, body], { stdout: "ignore" });
+    const child = spawn(["notify-send", "-a", "zcord", "--", title, body], { stdout: "ignore" });
     child.exited?.catch(() => {});
   } catch (error) {
     // Un fallo de la notificación no debe romper el dispatch del gateway que lo disparó.

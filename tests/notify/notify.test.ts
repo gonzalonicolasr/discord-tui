@@ -105,7 +105,21 @@ test("notify spawns notify-send with an args array and clean env", () => {
   }) as never;
 
   notify("gon (DM)", "hola", { spawn: spawn as never });
-  expect(calls[0]!.cmd).toEqual(["notify-send", "-a", "zcord", "gon (DM)", "hola"]);
+  expect(calls[0]!.cmd).toEqual(["notify-send", "-a", "zcord", "--", "gon (DM)", "hola"]);
+});
+
+test("a title or body starting with '-' is never read as a notify-send option", () => {
+  const calls: string[][] = [];
+  const spawn = ((cmd: string[]) => {
+    calls.push(cmd);
+    return { stdout: null, exited: Promise.resolve(0) } as never;
+  }) as never;
+
+  notify("-gon (DM)", "--urgency=critical -5 grados", { spawn: spawn as never });
+  const cmd = calls[0]!;
+  const end = cmd.indexOf("--");
+  expect(end).toBeGreaterThan(0);
+  expect(cmd.slice(end + 1)).toEqual(["-gon (DM)", "--urgency=critical -5 grados"]);
 });
 
 test("notify does not throw when the spawner throws synchronously", () => {
