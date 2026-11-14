@@ -23,7 +23,7 @@ test("plays through ffmpeg → pw-cat on the chosen output, and a second toggle 
   const fake = fakeSpawn();
   const player = createAudioPlayer({ spawn: fake.spawn as never, target: () => "alsa_output.usb-AE01", now: () => 1000 });
   player.toggle("att-1", URL_OK);
-  expect(fake.calls[0]).toEqual(["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-i", URL_OK, "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1"]);
+  expect(fake.calls[0]).toEqual(["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-rw_timeout", "15000000", "-i", URL_OK, "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1"]);
   expect(fake.calls[1]).toEqual(["pw-cat", "--playback", "--raw", "--format", "s16", "--rate", "48000", "--channels", "2", "--target", "alsa_output.usb-AE01", "-"]);
   expect(player.state()).toMatchObject({ key: "att-1", status: "playing", startedAt: 1000 });
   player.toggle("att-1", URL_OK);
@@ -78,4 +78,14 @@ test("if pw-cat fails to start, the ffmpeg already running is killed", () => {
   player.toggle("z", URL_OK);
   expect(killed).toEqual(["ffmpeg"]);
   expect(player.state().error).toContain("hace falta ffmpeg");
+});
+
+test("ffmpeg gives up on a stalled CDN (-rw_timeout 15 s, before the input)", () => {
+  const fake = fakeSpawn();
+  createAudioPlayer({ spawn: fake.spawn as never }).toggle("t", URL_OK);
+  const args = fake.calls[0]!;
+  const at = args.indexOf("-rw_timeout");
+  expect(at).toBeGreaterThan(0);
+  expect(args[at + 1]).toBe("15000000"); // microsegundos
+  expect(at).toBeLessThan(args.indexOf("-i"));
 });

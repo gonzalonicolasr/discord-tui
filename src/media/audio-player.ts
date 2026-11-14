@@ -73,7 +73,8 @@ export function createAudioPlayer(deps: AudioPlayerDeps = {}): AudioPlayer {
     setState({ key, status: "loading", startedAt: 0, error: null });
     try {
       const decoder = spawn(
-        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-i", url, "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1"],
+        // -rw_timeout (µs): si el CDN deja de mandar, ffmpeg corta en vez de dejar el reproductor "sonando" en silencio.
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-rw_timeout", "15000000", "-i", url, "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1"],
         { stdin: "ignore", stdout: "pipe" },
       );
       procs = [decoder];
