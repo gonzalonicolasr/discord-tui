@@ -680,6 +680,9 @@ export function App(props: {
     setHint(null);
   }
 
+  /** Hay un PATCH de edición esperando a Discord: no se manda otra edición hasta que vuelva. */
+  let editInFlight = false;
+
   async function submitComposer(): Promise<void> {
     const id = channelId();
     if (id === null) return;
@@ -695,15 +698,32 @@ export function App(props: {
     const content = serializeComposer(text, currentMentions());
 
     if (editing() !== null) {
+      if (editInFlight) return flash("todavía se está guardando la edición anterior; esperá un toque");
       const editId = editing()!;
-      try {
-        await props.actions.edit(id, editId, content, editAttachmentsChanged.value ? (kept ?? []).map((a) => a.id) : undefined);
-      } catch {
-        flash("no se pudo editar");
-        return;
-      }
+      const picked = currentMentions();
+      const changed = editAttachmentsChanged.value;
+      // Como en un envío nuevo: el cuadro se vacía antes de esperar a Discord, así lo que escribís mientras tanto queda.
       clearComposer();
       setInsert(true); // como Discord: el cuadro sigue listo para escribir
+      editInFlight = true;
+      try {
+        await props.actions.edit(id, editId, content, changed ? (kept ?? []).map((a) => a.id) : undefined);
+      } catch {
+        // Falló: si el cuadro sigue vacío en ese canal, vuelve la edición tal cual; si ya escribiste otra cosa,
+        // no se pisa y el texto de la edición queda en el portapapeles.
+        if (channelId() === id && editing() === null && currentText().length === 0 && currentAttachments().length === 0) {
+          setEditing(editId);
+          setEditAttachments(kept);
+          editAttachmentsChanged.value = changed;
+          setText(text, picked);
+          flash("no se pudo editar; te dejé la edición para reintentar");
+        } else {
+          void (deps().writeClipboardText ?? (async () => false))(text).catch(() => false);
+          flash("no se pudo editar; el texto de la edición quedó en el portapapeles");
+        }
+      } finally {
+        editInFlight = false;
+      }
       return;
     }
 
