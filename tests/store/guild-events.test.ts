@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 
+import { createActions } from "../../src/actions";
 import { isChannelMuted } from "../../src/store/selectors";
 import { createStore, emptyState } from "../../src/store/store";
 import readyVersioned from "../../fixtures/gateway/READY-versioned-1.json";
@@ -149,4 +150,48 @@ test("GUILD_CREATE of a guild already known (back from an outage) merges members
   expect(s.members[G]?.[ME]?.nick).toBe("yo");
   expect(s.members[G]?.["100000000000000011"]?.nick).toBe("dos");
   expect(s.presences["100000000000000011"]?.status).toBe("online");
+});
+
+test("leaving a guild drops its member-list subscription, so rejoining sends op 37 again", async () => {
+  const store = ready();
+  const sent: number[] = [];
+  const rest = { closed: false, request: async () => [] } as any;
+  const actions = createActions({ store, rest, gateway: { send: (op: number) => sent.push(op) } as any });
+  await actions.openChannel(CH);
+  expect(sent).toEqual([37]);
+  store.dispatch({ type: "gw", t: "GUILD_DELETE", d: { id: G } });
+  store.dispatch({ type: "gw", t: "GUILD_CREATE", d: structuredClone(readyVersioned.d.guilds[0]) });
+  await actions.openChannel(CH);
+  expect(sent).toEqual([37, 37]);
+});
+
+test("removing a guild clears its member lists, counts, read state and voice states, and moves focus off the closed channel", () => {
+  const store = ready();
+  store.dispatch({ type: "ui/selectGuild", id: G });
+  store.dispatch({ type: "ui/selectChannel", id: CH });
+  store.dispatch({ type: "ui/focus", focus: "composer" });
+  store.dispatch({ type: "members/subscribed", guildId: G, channelId: CH });
+  store.dispatch({
+    type: "gw",
+    t: "GUILD_MEMBER_LIST_UPDATE",
+    d: { guild_id: G, member_count: 1, online_count: 1, ops: [{ op: "SYNC", range: [0, 99], items: [{ group: { id: "online", count: 1 } }] }] },
+  });
+  store.dispatch({
+    type: "gw",
+    t: "VOICE_STATE_UPDATE",
+    d: { guild_id: G, channel_id: "100000000000000003", user_id: "100000000000000011", session_id: "x", self_mute: false, self_deaf: false, mute: false, deaf: false },
+  });
+  expect(store.getState().memberLists[G]).toBeDefined();
+  expect(store.getState().voice.states[G]).toBeDefined();
+  expect(store.getState().readState[CH]).toBeDefined();
+
+  store.dispatch({ type: "gw", t: "GUILD_DELETE", d: { id: G } });
+  const s = store.getState();
+  expect(s.subscribedChannels[G]).toBeUndefined();
+  expect(s.subscribedRanges[G]).toBeUndefined();
+  expect(s.memberLists[G]).toBeUndefined();
+  expect(s.memberCounts[G]).toBeUndefined();
+  expect(s.readState[CH]).toBeUndefined();
+  expect(s.voice.states[G]).toBeUndefined();
+  expect(s.ui.focus).toBe("channels");
 });

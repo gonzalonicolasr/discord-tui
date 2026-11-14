@@ -48,16 +48,42 @@ export function removeGuild(state: AppState, guildId: string): AppState {
   delete guilds[guildId];
   const channels: Record<string, ChannelState> = {};
   const messages = { ...state.messages };
+  const readState = { ...state.readState };
   for (const [id, channel] of Object.entries(state.channels)) {
-    if (channel.guildId === guildId) delete messages[id];
-    else channels[id] = channel;
+    if (channel.guildId === guildId) {
+      delete messages[id];
+      delete readState[id];
+    } else channels[id] = channel;
   }
-  const members = { ...state.members };
-  delete members[guildId];
+  // Todo lo que cuelga del servidor. La suscripción a la lista de miembros sobre todo: si quedara, al volver a
+  // entrar al mismo servidor no se mandaría de nuevo el op 37.
+  const without = <T>(record: Record<string, T>): Record<string, T> => {
+    const next = { ...record };
+    delete next[guildId];
+    return next;
+  };
   const ui = { ...state.ui };
   if (ui.selectedGuildId === guildId) ui.selectedGuildId = "@dms";
-  if (ui.selectedChannelId !== null && !channels[ui.selectedChannelId]) ui.selectedChannelId = null;
-  return { ...state, guilds, guildOrder: state.guildOrder.filter((id) => id !== guildId), channels, messages, members, ui };
+  if (ui.selectedChannelId !== null && !channels[ui.selectedChannelId]) {
+    ui.selectedChannelId = null;
+    // Sin canal abierto no hay mensajes, composer ni miembros donde quedarse: vuelve a la lista de canales.
+    if (ui.focus === "messages" || ui.focus === "composer" || ui.focus === "members") ui.focus = "channels";
+  }
+  return {
+    ...state,
+    guilds,
+    guildOrder: state.guildOrder.filter((id) => id !== guildId),
+    channels,
+    messages,
+    readState,
+    members: without(state.members),
+    memberLists: without(state.memberLists),
+    memberCounts: without(state.memberCounts),
+    subscribedChannels: without(state.subscribedChannels),
+    subscribedRanges: without(state.subscribedRanges),
+    voice: { ...state.voice, states: without(state.voice.states) },
+    ui,
+  };
 }
 
 /** GUILD_DELETE con `unavailable: true` es una caída de Discord, no que te fuiste. */
