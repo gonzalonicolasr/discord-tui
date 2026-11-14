@@ -66,3 +66,16 @@ test("waveform bars, duration and what counts as audio", () => {
   expect(isAudioAttachment({ filename: "tema.MP3" })).toBe(true);
   expect(isAudioAttachment({ content_type: "image/png", filename: "a.png" })).toBe(false);
 });
+
+test("if pw-cat fails to start, the ffmpeg already running is killed", () => {
+  const killed: string[] = [];
+  let n = 0;
+  const spawn = (cmd: string[]) => {
+    if (++n === 2) throw new Error("ENOENT pw-cat");
+    return { stdout: new ReadableStream<Uint8Array>(), exited: new Promise<number>(() => {}), kill: () => killed.push(cmd[0]!) };
+  };
+  const player = createAudioPlayer({ spawn: spawn as never });
+  player.toggle("z", URL_OK);
+  expect(killed).toEqual(["ffmpeg"]);
+  expect(player.state().error).toContain("hace falta ffmpeg");
+});

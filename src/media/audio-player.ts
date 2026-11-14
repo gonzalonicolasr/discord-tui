@@ -76,12 +76,13 @@ export function createAudioPlayer(deps: AudioPlayerDeps = {}): AudioPlayer {
         ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-i", url, "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1"],
         { stdin: "ignore", stdout: "pipe" },
       );
+      procs = [decoder];
       const target = deps.target?.() ?? null;
       const cmd = ["pw-cat", "--playback", "--raw", "--format", "s16", "--rate", "48000", "--channels", "2"];
       if (target) cmd.push("--target", target);
       cmd.push("-");
       const out = spawn(cmd, { stdin: decoder.stdout ?? "ignore", stdout: "ignore" });
-      procs = [decoder, out];
+      procs.push(out);
       setState({ key, status: "playing", startedAt: now(), error: null });
       void Promise.all([decoder.exited, out.exited]).then(([decoded]) => {
         if (mine !== generation) return;
