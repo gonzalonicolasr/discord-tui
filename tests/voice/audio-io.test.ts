@@ -1,4 +1,6 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
+
+import { log } from "../../src/log/logger";
 
 import {
   AudioDeviceError,
@@ -141,6 +143,24 @@ describe("startCapture", () => {
     await Bun.sleep(1);
     expect(frames).toHaveLength(2);
     await capture.stop();
+  });
+
+  test("a listener that keeps throwing is logged once, not on every frame", async () => {
+    const warn = spyOn(log, "warn");
+    try {
+      const fake = fakeSpawn();
+      const capture = await startCapture({ spawn: fake.spawn });
+      capture.onFrame(() => {
+        throw new Error("opus encoder choked");
+      });
+      for (let i = 0; i < 50; i++) fake.calls[0]!.emit(new Uint8Array(FRAME_BYTES)); // ~1 s de cuadros
+      await Bun.sleep(5);
+      const failures = warn.mock.calls.filter(([event]) => event === "voice.capture-listener-failed");
+      expect(failures).toHaveLength(1);
+      await capture.stop();
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   test("a mic read that fails never leaves an unhandled rejection", async () => {

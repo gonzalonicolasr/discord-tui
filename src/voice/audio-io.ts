@@ -73,6 +73,8 @@ export async function startCapture(opts?: { target?: string; spawn?: SpawnLike }
 
   const framer = createFramer();
   const listeners = new Set<(pcm: Uint8Array) => void>();
+  /** Oyentes que ya tiraron: se loguea una vez por oyente, no en cada cuadro (~50 por segundo). */
+  const failed = new WeakSet<(pcm: Uint8Array) => void>();
 
   void (async () => {
     const stdout = proc.stdout;
@@ -95,6 +97,8 @@ export async function startCapture(opts?: { target?: string; spawn?: SpawnLike }
           try {
             listener(frame);
           } catch (error) {
+            if (failed.has(listener)) continue;
+            failed.add(listener);
             log.warn("voice.capture-listener-failed", { error_name: error instanceof Error ? error.name : "error" });
           }
         }
