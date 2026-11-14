@@ -626,6 +626,19 @@ export function App(props: {
   /** Segunda v dentro de este tiempo: recién ahí se sale de la llamada. */
   const LEAVE_CONFIRM_MS = 2000;
   let lastLeaveV = 0;
+  /** Primera Ctrl+R con algo que se perdería: la segunda dentro de LEAVE_CONFIRM_MS recarga. */
+  let lastReload = 0;
+
+  /** Lo que una recarga tira sin guardar: borradores, adjuntos pendientes y tu transmisión. */
+  function reloadLosses(): string[] {
+    const lost: string[] = [];
+    if (Object.values(drafts()).some((text) => text.trim().length > 0)) lost.push("el borrador");
+    const files = Object.values(attachments()).reduce((n, list) => n + list.length, 0);
+    if (files > 0) lost.push(files === 1 ? "1 adjunto" : `${files} adjuntos`);
+    const stream = props.store.getState().voice.stream.status;
+    if (stream === "live" || stream === "starting") lost.push("la transmisión");
+    return lost;
+  }
 
   function closeComposer(): void {
     setReplyTo(null);
@@ -952,8 +965,17 @@ export function App(props: {
         return;
       }
       props.onActivity?.();
-      // Ctrl+R recarga zcord (código nuevo, sin salir de la terminal): funciona en cualquier modo.
+      // Ctrl+R recarga zcord (código nuevo, sin salir de la terminal): funciona en cualquier modo. Si hay algo que
+      // se perdería (borrador, adjuntos, tu transmisión), pide una segunda Ctrl+R, como v con la llamada.
       if (key.ctrl && key.name === "r" && props.onReload) {
+        const lost = reloadLosses();
+        const now = Date.now();
+        if (lost.length > 0 && now - lastReload > LEAVE_CONFIRM_MS) {
+          lastReload = now;
+          flash(`Ctrl+R otra vez para recargar: se pierde ${lost.join(", ")}`);
+          return;
+        }
+        lastReload = 0;
         flash("recargando zcord…");
         props.onReload();
         return;
