@@ -159,8 +159,9 @@ export function applyPage(
         byId,
         loadingOlder: false,
         hasMoreBefore: mode === "older" ? messages.length >= 50 : previous.hasMoreBefore,
-        // Sin los más nuevos, el slice ya no es la última página: al volver a abrir el canal se pide de nuevo.
-        stale: fromNewest || mode === "around",
+        // Solo la última página deja el slice al día. Una página vieja no lo arregla (tras un "around" sigue siendo
+        // una ventana vieja) y si soltó los más nuevos lo deja viejo: al volver a abrir el canal se pide de nuevo.
+        stale: mode === "latest" ? false : mode === "around" || existing.stale || fromNewest,
       },
     },
   };

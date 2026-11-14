@@ -103,3 +103,19 @@ test("viewing an old 'around' page never sends an ack older than what is already
   await new Promise((resolve) => setTimeout(resolve, 1_700));
   expect(posts).toEqual([]);
 });
+
+test("scrolling up after an 'around' jump keeps the slice stale: it is still an old window, not the latest page", async () => {
+  const store = withDm();
+  store.dispatch({ type: "messages/page", channelId: CH, messages: range(1000, 50), mode: "latest" });
+  const { rest } = fakeRest((path) => {
+    const params = new URL("http://x" + path).searchParams;
+    if (params.has("around")) return range(475, 50).reverse();
+    const n = Number((BigInt(params.get("before")!) - 100000000000000000n) / 1000n);
+    return range(n - 50, 50).reverse();
+  });
+  const actions = createActions({ store, rest, gateway: gw });
+  await actions.jumpToMessage!(CH, id(500));
+  await actions.loadOlder(CH);
+  expect(ids(store)[0]).toBe(id(425));
+  expect(store.getState().messages[CH]!.stale).toBe(true);
+});
