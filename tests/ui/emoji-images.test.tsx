@@ -1,10 +1,11 @@
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, spyOn, test } from "bun:test";
 import { ImageRenderable, type Renderable } from "@opentui/core";
 import { testRender } from "@opentui/solid";
 import { join } from "node:path";
 
 import { DEMO_EMOJI } from "../../scripts/demo/emoji";
 import { buildDemoStore, DEMO } from "../../scripts/demo-state";
+import { createImageCache, imageCache } from "../../src/images/cache";
 import { selectMessages } from "../../src/store/selectors";
 import { MessageItem } from "../../src/ui/components/MessageItem";
 import { THEMES } from "../../src/ui/theme";
@@ -49,8 +50,17 @@ test("jumbo emoji with images off keep today's :name: text", async () => {
 });
 
 test("jumbo emoji with images on: one 4x2 image per custom emoji, unicode stays text, animated as GIF", async () => {
-  const before = requests.length;
-  const r = await renderMessage(DEMO_EMOJI.jumboMsg, true);
+  // imageCache es uno por proceso: otros tests de la suite ya pueden haber bajado estos emojis. Durante este test
+  // lo atiende un cache nuevo (el mismo código) cuyo fetch anota cada pedido, así no depende del orden de la suite.
+  const seen: { url: string; headers: unknown }[] = [];
+  const fresh = createImageCache({
+    fetch: (async (input: string | URL | Request, init?: RequestInit) => {
+      seen.push({ url: String(input), headers: init?.headers });
+      return new Response(PNG, { status: 200 });
+    }) as typeof fetch,
+  });
+  const spy = spyOn(imageCache, "get").mockImplementation((url) => fresh.get(url));
+  const r = await renderMessage(DEMO_EMOJI.jumboMsg, true).finally(() => spy.mockRestore());
   const found = images(r.renderer.root);
   expect(found).toHaveLength(2);
   expect(found.map((img) => [img.width, img.height])).toEqual([
@@ -60,9 +70,10 @@ test("jumbo emoji with images on: one 4x2 image per custom emoji, unicode stays 
   const frame = r.captureCharFrame();
   expect(frame).toContain("🎉");
   expect(frame).not.toContain(":kek:");
-  const urls = requests.slice(before).map((req) => req.url);
+  const urls = seen.map((req) => req.url);
   expect(urls).toContain(`https://cdn.discordapp.com/emojis/${DEMO_EMOJI.kek}.webp?size=48&quality=lossless`);
   expect(urls).toContain(`https://cdn.discordapp.com/emojis/${DEMO_EMOJI.baile}.gif?size=48`);
+  expect(seen.every((req) => req.headers === undefined)).toBe(true); // sin token ni nada que salga al CDN
   expect(requests.every((req) => req.headers === undefined)).toBe(true);
   r.renderer.destroy();
 });
