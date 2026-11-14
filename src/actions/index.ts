@@ -271,7 +271,7 @@ export function createActions(deps: ActionsDeps): Actions {
     await openChannel(channelId);
     if (!deps.store.getState().messages[channelId]?.byId[messageId]) {
       const around = await getMessages(deps.rest, channelId, { around: messageId, limit: 50 });
-      deps.store.dispatch({ type: "messages/page", channelId, messages: around, mode: "older" });
+      deps.store.dispatch({ type: "messages/page", channelId, messages: around, mode: "around" });
     }
   }
 
@@ -360,7 +360,13 @@ export function createActions(deps: ActionsDeps): Actions {
       await sendActions.send(channelId, content, opts);
     },
     keystroke: (channelId, textAfter) => typing.onKeystroke(channelId, textAfter),
-    viewing: (channelId, newestId) => ack.viewing(channelId, newestId),
+    viewing: (channelId, newestId) => {
+      // Tras saltar a un mensaje viejo lo más nuevo cargado puede ser anterior a lo ya leído: ese ack haría retroceder
+      // la lectura. Se trata como "nada nuevo que marcar".
+      const acked = channelId === null ? null : deps.store.getState().readState[channelId]?.lastAckedId ?? null;
+      const behind = newestId !== null && acked !== null && compareSnowflakes(newestId, acked) <= 0;
+      ack.viewing(channelId, behind ? null : newestId);
+    },
     voice: deps.voice,
     openUrl: (url) => {
       if (!(deps.openUrl ?? openUrl)(url)) {

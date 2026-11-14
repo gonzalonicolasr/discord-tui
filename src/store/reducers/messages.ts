@@ -119,14 +119,24 @@ export function applyPage(
   state: AppState,
   channelId: string,
   messages: ApiMessage[],
-  mode: "older" | "latest",
+  mode: "older" | "latest" | "around",
 ): AppState {
   let nextState = state;
   for (const message of messages) nextState = rememberAuthor(nextState, message);
   state = nextState;
-  const previous = state.messages[channelId] ?? emptySlice();
+  const existing = state.messages[channelId] ?? emptySlice();
+  // La última página sobre un slice viejo (sesión nueva) o un salto "around" reemplazan el slice: mezclarlos deja
+  // mensajes ya borrados y un hueco sin marcar. De lo viejo solo se queda lo que llegó en vivo durante el GET.
+  const replace = mode === "around" || (mode === "latest" && existing.stale);
+  const newestInPage = messages.reduce<string | null>((max, m) => (max === null || compareSnowflakes(m.id, max) > 0 ? m.id : max), null);
+  const keptIds = !replace
+    ? existing.ids
+    : mode === "latest" && newestInPage !== null
+      ? existing.ids.filter((id) => compareSnowflakes(id, newestInPage) > 0)
+      : [];
+  const previous = replace ? { ...emptySlice(), byId: Object.fromEntries(keptIds.map((id) => [id, existing.byId[id]!])) } : existing;
   const byId = { ...previous.byId };
-  const ids = new Set(previous.ids);
+  const ids = new Set(keptIds);
   for (const message of messages) {
     byId[message.id] = message;
     ids.add(message.id);
@@ -150,7 +160,7 @@ export function applyPage(
         loadingOlder: false,
         hasMoreBefore: mode === "older" ? messages.length >= 50 : previous.hasMoreBefore,
         // Sin los más nuevos, el slice ya no es la última página: al volver a abrir el canal se pide de nuevo.
-        stale: fromNewest,
+        stale: fromNewest || mode === "around",
       },
     },
   };

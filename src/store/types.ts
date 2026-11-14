@@ -265,7 +265,8 @@ export type Action =
   | { type: "gw"; t: string; d: any }
   | { type: "connection"; status: GatewayStatus }
   | { type: "threads/loaded"; guildId: string; threads: unknown[] }
-  | { type: "messages/page"; channelId: string; messages: ApiMessage[]; mode: "older" | "latest" }
+  /** `around`: la página alrededor de un mensaje (saltar a una mención); reemplaza el slice. */
+  | { type: "messages/page"; channelId: string; messages: ApiMessage[]; mode: "older" | "latest" | "around" }
   | { type: "messages/loading"; channelId: string; loading: boolean }
   | { type: "messages/staleAll" }
   | { type: "ui/selectGuild"; id: string | "@dms" }

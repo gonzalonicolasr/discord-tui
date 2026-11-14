@@ -57,3 +57,49 @@ test("loadOlder past the 500-message ring keeps the page it just fetched (trims 
   // Se soltó lo más nuevo: al volver a abrir el canal se pide de nuevo la última página.
   expect(store.getState().messages[CH]!.stale).toBe(true);
 });
+
+test("refetching a stale channel replaces the old slice: no deleted messages come back, no hidden gap", async () => {
+  const store = withDm();
+  store.dispatch({ type: "messages/page", channelId: CH, messages: range(100, 50), mode: "latest" });
+  store.dispatch({ type: "messages/staleAll" });
+  // Mientras no había conexión se borró el 100 y llegaron 200 nuevos: el GET trae los últimos 50.
+  const { rest } = fakeRest(() => range(300, 50).reverse());
+  await createActions({ store, rest, gateway: gw }).openChannel(CH);
+  expect(ids(store)).toEqual(range(300, 50).map((m) => m.id));
+  expect(store.getState().messages[CH]!.stale).toBe(false);
+});
+
+test("a message that arrives live while the stale refetch is in flight is kept", async () => {
+  const store = withDm();
+  store.dispatch({ type: "messages/page", channelId: CH, messages: range(100, 50), mode: "latest" });
+  store.dispatch({ type: "messages/staleAll" });
+  const { rest } = fakeRest(() => {
+    store.dispatch({ type: "gw", t: "MESSAGE_CREATE", d: msg(400) });
+    return range(300, 50).reverse();
+  });
+  await createActions({ store, rest, gateway: gw }).openChannel(CH);
+  expect(ids(store)).toEqual([...range(300, 50), msg(400)].map((m) => m.id));
+});
+
+test("jumping to an old message replaces the slice with the 'around' page instead of mixing it with the latest one", async () => {
+  const store = withDm();
+  store.dispatch({ type: "messages/page", channelId: CH, messages: range(1000, 50), mode: "latest" });
+  const { rest } = fakeRest(() => range(475, 50).reverse());
+  await createActions({ store, rest, gateway: gw }).jumpToMessage!(CH, id(500));
+  // Solo la página de alrededor: lo más nuevo cargado es lo último que se ve (el ack no marca el hueco como leído).
+  expect(ids(store)).toEqual(range(475, 50).map((m) => m.id));
+  expect(store.getState().messages[CH]!.hasMoreBefore).toBe(true);
+  // No es la última página: al volver a abrir el canal se pide de nuevo.
+  expect(store.getState().messages[CH]!.stale).toBe(true);
+});
+
+test("viewing an old 'around' page never sends an ack older than what is already read", async () => {
+  const store = withDm();
+  store.dispatch({ type: "gw", t: "MESSAGE_ACK", d: { channel_id: CH, message_id: id(1049) } });
+  const posts: string[] = [];
+  const rest = { closed: false, request: async (method: string, path: string) => (method === "POST" && posts.push(path), {}) } as any;
+  const actions = createActions({ store, rest, gateway: gw });
+  actions.viewing!(CH, id(500));
+  await new Promise((resolve) => setTimeout(resolve, 1_700));
+  expect(posts).toEqual([]);
+});
