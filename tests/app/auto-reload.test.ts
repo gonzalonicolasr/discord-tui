@@ -23,6 +23,11 @@ test("it is safe to reload alone only with nothing to lose, nothing in flight, n
   expect(autoReloadBlockers({ ...idle, state: inCall })).toEqual(["la llamada"]);
   const joining = withState((s) => ({ ...s, voice: { ...s.voice, status: "joining" } }));
   expect(autoReloadBlockers({ ...idle, state: joining })).toEqual(["la llamada"]);
+  const reconnecting = withState((s) => ({ ...s, voice: { ...s.voice, status: "reconnecting" } }));
+  expect(autoReloadBlockers({ ...idle, state: reconnecting })).toEqual(["la llamada"]);
+  // Llamada cortada o join fallido: channelId null y status "error" hasta el próximo join. Ya no hay llamada.
+  const droppedCall = withState((s) => ({ ...s, voice: { ...s.voice, channelId: null, status: "error", error: "se cortó la voz" } }));
+  expect(autoReloadBlockers({ ...idle, state: droppedCall })).toEqual([]);
   const watching = withState((s) => ({ ...s, voice: { ...s.voice, watch: { status: "watching", userId: "9", error: null } } }));
   expect(autoReloadBlockers({ ...idle, state: watching })).toEqual(["la transmisión que mirás"]);
   expect(autoReloadBlockers({ ...idle, state: emptyState(), lastInputAt: NOW - 3_000 })).toEqual(["lo que estás tocando"]);

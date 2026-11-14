@@ -24,7 +24,9 @@ export function autoReloadBlockers(input: ReloadSafetyInput): string[] {
   if (input.editing) reasons.push("la edición");
   if (Object.values(input.state.outbox).some((item) => item.state === "pending")) reasons.push("un envío en curso");
   const voice = input.state.voice;
-  if (voice.channelId !== null || voice.status !== "idle") reasons.push("la llamada");
+  // Solo una llamada activa: "error" (llamada cortada, join fallido) queda hasta el próximo join y no es una llamada.
+  const inCall = voice.status === "joining" || voice.status === "connected" || voice.status === "reconnecting";
+  if (voice.channelId !== null || inCall) reasons.push("la llamada");
   if (voice.watch.status === "watching" || voice.watch.status === "connecting") reasons.push("la transmisión que mirás");
   if (input.now - input.lastInputAt < AUTO_RELOAD_QUIET_MS) reasons.push("lo que estás tocando");
   return reasons;
