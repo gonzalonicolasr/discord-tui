@@ -233,3 +233,76 @@ test("non-JSON login response reports the content type", async () => {
     h.stop();
   }
 });
+
+test("stop() while the ticket exchange is in flight: the token is never emitted", async () => {
+  let loginArrived = false;
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  let answer: () => Promise<Response> = async () => Response.json({});
+  const h = await startHarness({}, async () => {
+    loginArrived = true;
+    await gate;
+    return answer();
+  });
+  try {
+    answer = async () => Response.json({ encrypted_token: await encryptFor(h.keys.publicSpkiB64, fakeToken()) });
+    await waitFor(() => loginArrived);
+    h.auth.stop(); // el usuario canceló
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(h.events.some((event) => event.type === "token")).toBe(false);
+  } finally {
+    h.stop();
+  }
+});
+
+async function gatedAuth(makeKeys: () => Promise<RaKeys>) {
+  const fake = startFakeRemoteAuth({ stallAfterQr: true });
+  const http = startFakeHttp(() => Response.json({}));
+  const auth = createRemoteAuth({
+    http: createHttp({ props: createClientProps({ buildNumber: 1 }), baseUrl: http.url }),
+    wsUrl: fake.url,
+    makeKeys,
+  });
+  const events: RaEvent[] = [];
+  auth.on((event) => events.push(event));
+  return { fake, auth, events, stop: () => (auth.stop(), fake.stop(), http.stop()) };
+}
+
+test("start() again while the keys are being made never leaves a second socket", async () => {
+  const keys = await generateRaKeys();
+  for (const restart of ["start-start", "stop-start"] as const) {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const g = await gatedAuth(async () => (await gate, keys));
+    try {
+      g.auth.start();
+      if (restart === "stop-start") g.auth.stop();
+      g.auth.start();
+      release();
+      await waitFor(() => g.events.some((event) => event.type === "qr"));
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(g.fake.connections).toBe(1);
+    } finally {
+      g.stop();
+    }
+  }
+});
+
+test("a key generation failure reports an error instead of an unhandled rejection", async () => {
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => void unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  const g = await gatedAuth(async () => {
+    throw new Error("no RSA");
+  });
+  try {
+    g.auth.start();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(unhandled).toEqual([]);
+    expect(g.events.map((event) => event.type)).toEqual(["error"]);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+    g.stop();
+  }
+});

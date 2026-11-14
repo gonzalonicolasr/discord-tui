@@ -45,6 +45,10 @@ export function createRemoteAuth(deps: RemoteAuthDeps): RemoteAuth {
   let reconnects = 0;
   let awaitingLogin = false;
   let userId = "0";
+  /** connect() esperando las claves (start() repetido no abre otro socket). */
+  let connecting = false;
+  /** Sube con cada stop(): lo que termina de esperar con una sesión vieja no sigue. */
+  let session = 0;
 
   function emit(event: RaEvent): void {
     for (const listener of [...listeners]) listener(event);
@@ -89,6 +93,8 @@ export function createRemoteAuth(deps: RemoteAuthDeps): RemoteAuth {
 
   function stop(): void {
     stopped = true;
+    session += 1;
+    connecting = false;
     if (reconnectTimer !== null) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
@@ -115,8 +121,21 @@ export function createRemoteAuth(deps: RemoteAuthDeps): RemoteAuth {
 
   async function connect(): Promise<void> {
     if (stopped) return;
-    keys = await makeKeys();
-    if (stopped) return;
+    const mine = session;
+    connecting = true;
+    let fresh: RaKeys;
+    try {
+      fresh = await makeKeys();
+    } catch (error) {
+      if (mine !== session) return;
+      log.error("remote-auth.keys-failed", { error_name: error instanceof Error ? error.name : "error" });
+      emit({ type: "error", reason: "key generation failed" });
+      stop();
+      return;
+    }
+    if (mine !== session) return;
+    connecting = false;
+    keys = fresh;
     awaitingLogin = false;
     acked = true;
 
@@ -209,14 +228,17 @@ export function createRemoteAuth(deps: RemoteAuthDeps): RemoteAuth {
     awaitingLogin = true;
     clearHeartbeat();
     if (keys === null || typeof message.ticket !== "string") return;
+    const mine = session;
     try {
       const fingerprint = await fingerprintJob;
+      if (mine !== session) return;
       const response = await deps.http.request<Record<string, unknown>>(
         "POST",
         "/users/@me/remote-auth/login",
         { ticket: message.ticket },
         fingerprint ? { headers: { "X-Fingerprint": fingerprint } } : undefined,
       );
+      if (mine !== session) return; // stop() mientras se canjeaba el ticket
       const encrypted = typeof response?.encrypted_token === "string" ? response.encrypted_token : null;
       if (encrypted === null) {
         const names =
@@ -227,9 +249,11 @@ export function createRemoteAuth(deps: RemoteAuthDeps): RemoteAuth {
         return;
       }
       const token = new TextDecoder().decode(await keys.decrypt(encrypted));
+      if (mine !== session) return;
       emit({ type: "token", token: new Secret(token), userId });
       stop();
     } catch (error) {
+      if (mine !== session) return;
       if (error instanceof CaptchaRequiredError) {
         emit({ type: "captcha" });
         stop();
@@ -288,7 +312,7 @@ export function createRemoteAuth(deps: RemoteAuthDeps): RemoteAuth {
 
   return {
     start(): void {
-      if (socket !== null || reconnectTimer !== null) return;
+      if (socket !== null || reconnectTimer !== null || connecting) return;
       stopped = false;
       reconnects = 0;
       // Como la web: un fingerprint (y las cookies que vienen con él) antes del login, para que Discord no
