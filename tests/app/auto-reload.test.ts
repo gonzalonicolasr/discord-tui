@@ -9,13 +9,14 @@ import {
   createAutoReloader,
   loadAutoReloadRecord,
   saveAutoReloadRecord,
+  AUTO_RELOAD_COOLDOWN_MS,
   AUTO_RELOAD_QUIET_MS,
 } from "../../src/app/auto-reload";
 import { emptyState } from "../../src/store/store";
 import type { AppState } from "../../src/store/types";
 
 const NOW = 1_000_000;
-const idle = { losses: [], editing: false, lastInputAt: NOW - AUTO_RELOAD_QUIET_MS - 1, now: NOW };
+const idle = { losses: [], editing: false, lastInputAt: NOW - AUTO_RELOAD_QUIET_MS - 1, lastAutoReloadAt: 0, now: NOW };
 
 function withState(patch: (state: AppState) => AppState): AppState {
   return patch(emptyState());
@@ -40,7 +41,7 @@ test("it is safe to reload alone only with nothing to lose, nothing in flight, n
   expect(autoReloadBlockers({ ...idle, state: droppedCall })).toEqual([]);
   const watching = withState((s) => ({ ...s, voice: { ...s.voice, watch: { status: "watching", userId: "9", error: null } } }));
   expect(autoReloadBlockers({ ...idle, state: watching })).toEqual(["la transmisión que mirás"]);
-  expect(autoReloadBlockers({ ...idle, state: emptyState(), lastInputAt: NOW - 3_000 })).toEqual(["lo que estás tocando"]);
+  expect(autoReloadBlockers({ ...idle, state: emptyState(), lastInputAt: NOW - 3_000 })).toEqual(["10 s sin tocar zcord"]);
 });
 
 function fakeClock() {
@@ -68,6 +69,12 @@ function fakeClock() {
     pending: () => timers.length,
   };
 }
+
+test("M2: an automatic reload less than 10 min after the previous one waits (no reload storm while code is being edited)", () => {
+  expect(AUTO_RELOAD_COOLDOWN_MS).toBe(10 * 60_000);
+  expect(autoReloadBlockers({ ...idle, state: emptyState(), lastAutoReloadAt: NOW - 60_000 })).toEqual(["10 min desde la última recarga automática"]);
+  expect(autoReloadBlockers({ ...idle, state: emptyState(), lastAutoReloadAt: NOW - AUTO_RELOAD_COOLDOWN_MS })).toEqual([]);
+});
 
 test("a burst of changes (a git pull touching many files) gives a single reload, after the burst", () => {
   const clock = fakeClock();

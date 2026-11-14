@@ -5,7 +5,7 @@ import { App } from "../../src/ui/App";
 import { buildDemoStore, demoActions } from "../../scripts/demo-state";
 
 // Cambios de código con zcord abierto: si es seguro se recarga solo (mismo camino que Ctrl+R); si no, avisa y espera.
-async function setup() {
+async function setup(lastAutoReloadAt = 0) {
   const store = buildDemoStore();
   const actions = demoActions(store);
   let reloads = 0;
@@ -28,6 +28,7 @@ async function setup() {
             return () => {};
           },
           reload: () => void (reloads += 1),
+          lastAt: () => lastAutoReloadAt,
         }}
         deps={deps as never}
       />
@@ -85,6 +86,31 @@ test("a recent click or key holds the reload until zcord has been left alone ~10
   jest.advanceTimersByTime(9_000);
   expect(reloads()).toBe(0);
   jest.advanceTimersByTime(6_000);
+  expect(reloads()).toBe(1);
+  h.renderer.destroy();
+});
+
+test("a freshly opened zcord counts the quiet time from its start, not from zero", async () => {
+  const { h, reloads, codeChanged } = await setup();
+  jest.useFakeTimers();
+  codeChanged();
+  jest.advanceTimersByTime(4_000);
+  expect(reloads()).toBe(0); // antes la quietud arrancaba en 0 y acá ya se había recargado
+  jest.advanceTimersByTime(9_000); // reintentos a los 2, 7 y 12 s: el de los 12 s ya pasó los 10 s quieto
+  expect(reloads()).toBe(1);
+  h.renderer.destroy();
+});
+
+test("less than 10 min after the previous automatic reload it waits for the cooldown, then reloads", async () => {
+  const { h, reloads, codeChanged } = await setup(Date.now() - 60_000);
+  jest.useFakeTimers();
+  jest.advanceTimersByTime(11_000);
+  codeChanged();
+  jest.advanceTimersByTime(60_000);
+  expect(reloads()).toBe(0);
+  await h.renderOnce();
+  expect(h.captureCharFrame()).toContain("10 min desde la última recarga automática");
+  jest.advanceTimersByTime(8 * 60_000);
   expect(reloads()).toBe(1);
   h.renderer.destroy();
 });

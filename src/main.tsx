@@ -107,12 +107,13 @@ async function main(): Promise<void> {
     codeListeners.add(listener);
     return () => codeListeners.delete(listener);
   };
-  // Tope contra bucles, en disco: una recarga automática por versión de GitHub (SHA de FETCH_HEAD). Si no se puede
-  // guardar, no se recarga solo (queda Ctrl+R).
+  // Tope contra bucles, en disco: una recarga automática por versión de GitHub (SHA de FETCH_HEAD) y como mínimo
+  // 10 min entre dos recargas automáticas. Si no se puede guardar, no se recarga solo (queda Ctrl+R).
   const lastAutoReload = loadAutoReloadRecord();
   let pendingUpdateSha: string | null = null;
   const autoReload = {
     onChange: onCodeChange,
+    lastAt: (): number => lastAutoReload?.at ?? 0,
     reload: (active: Runtime): void => {
       const updateSha = pendingUpdateSha ?? lastAutoReload?.updateSha ?? null;
       if (!saveAutoReloadRecord({ at: Date.now(), updateSha })) {

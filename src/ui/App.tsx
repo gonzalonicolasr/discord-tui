@@ -107,7 +107,7 @@ export function App(props: {
    * Recarga sola cuando cambia el código de zcord o hay una versión nueva (solo con bin/zcord): `onChange` avisa del
    * cambio y `reload` guarda el tope de recargas automáticas y recarga como Ctrl+R.
    */
-  autoReload?: { onChange(listener: () => void): () => void; reload(): void };
+  autoReload?: { onChange(listener: () => void): () => void; reload(): void; lastAt(): number };
   settingsDeps?: SettingsDeps;
   deps?: Partial<AppDeps>;
   onActivity?(): void;
@@ -648,7 +648,8 @@ export function App(props: {
 
   // Recarga sola cuando cambia el código: mismo camino que Ctrl+R, pero solo si no se pierde ni se corta nada y
   // nadie tocó zcord en los últimos segundos. Si no, avisa por qué y vuelve a probar cada tanto.
-  let lastInputAt = 0;
+  // "Quieto" se cuenta desde el arranque: un zcord recién abierto no se recarga al toque.
+  let lastInputAt = Date.now();
   // Los clicks no pasan por useKeyboard (y muchos componentes cortan la propagación): se miran en la entrada cruda.
   const onRawInput = (chunk: Buffer | string): void => {
     if (/\x1b\[<\d+;\d+;\d+[Mm]/.test(chunk.toString())) lastInputAt = Date.now();
@@ -666,10 +667,11 @@ export function App(props: {
           editing: editing() !== null || editInFlight,
           state: props.store.getState(),
           lastInputAt,
+          lastAutoReloadAt: auto.lastAt(),
           now: Date.now(),
         }),
       waiting: (reasons) => {
-        const text = `Hay cambios en zcord: se recarga solo cuando termines con ${reasons.join(", ")} (o Ctrl+R ya).`;
+        const text = `Hay cambios en zcord: se recarga solo cuando se pueda (esperando: ${reasons.join(", ")}). Ctrl+R recarga ya.`;
         if (text === lastWaiting) return;
         lastWaiting = text;
         props.store.dispatch({ type: "notice/push", key: "code-changed", level: "warn", text });

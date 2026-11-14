@@ -8,6 +8,8 @@ import type { AppState } from "../store/types";
 export const AUTO_RELOAD_QUIET_MS = 10_000;
 /** Cambios seguidos (un git pull, un merge) dentro de este rato cuentan como uno solo. */
 export const AUTO_RELOAD_DEBOUNCE_MS = 2_000;
+/** Mínimo entre dos recargas automáticas (también entre procesos): sin tormenta de recargas mientras se edita. */
+export const AUTO_RELOAD_COOLDOWN_MS = 10 * 60_000;
 /** Si no se puede recargar todavía, se vuelve a probar cada tanto. */
 export const AUTO_RELOAD_RETRY_MS = 5_000;
 
@@ -17,8 +19,10 @@ export interface ReloadSafetyInput {
   /** Editando un mensaje o con el PATCH de la edición esperando a Discord. */
   editing: boolean;
   state: AppState;
-  /** Última tecla o click. */
+  /** Última tecla o click (o el arranque del proceso, si todavía no tocaste nada). */
   lastInputAt: number;
+  /** Cuándo fue la última recarga automática (de `AutoReloadRecord`; 0 = nunca). */
+  lastAutoReloadAt: number;
   now: number;
 }
 
@@ -32,7 +36,8 @@ export function autoReloadBlockers(input: ReloadSafetyInput): string[] {
   const inCall = voice.status === "joining" || voice.status === "connected" || voice.status === "reconnecting";
   if (voice.channelId !== null || inCall) reasons.push("la llamada");
   if (voice.watch.status === "watching" || voice.watch.status === "connecting") reasons.push("la transmisión que mirás");
-  if (input.now - input.lastInputAt < AUTO_RELOAD_QUIET_MS) reasons.push("lo que estás tocando");
+  if (input.now - input.lastInputAt < AUTO_RELOAD_QUIET_MS) reasons.push("10 s sin tocar zcord");
+  if (input.now - input.lastAutoReloadAt < AUTO_RELOAD_COOLDOWN_MS) reasons.push("10 min desde la última recarga automática");
   return reasons;
 }
 
