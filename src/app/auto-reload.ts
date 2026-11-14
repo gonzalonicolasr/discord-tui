@@ -1,3 +1,7 @@
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+
+import { stateDir } from "../config/paths";
 import type { AppState } from "../store/types";
 
 /** Sin teclas ni clicks durante este rato: recién ahí zcord se recarga solo. */
@@ -30,6 +34,48 @@ export function autoReloadBlockers(input: ReloadSafetyInput): string[] {
   if (voice.watch.status === "watching" || voice.watch.status === "connecting") reasons.push("la transmisión que mirás");
   if (input.now - input.lastInputAt < AUTO_RELOAD_QUIET_MS) reasons.push("lo que estás tocando");
   return reasons;
+}
+
+/**
+ * Última recarga automática, en disco (sobrevive a la recarga): cuándo fue y por qué versión de GitHub (SHA de
+ * FETCH_HEAD). Es el tope contra los bucles; no se confía en la marca update-available, que bin/zcord borra aunque
+ * el pull no haya traído nada (clon en otra rama, por ejemplo).
+ */
+export interface AutoReloadRecord {
+  at: number;
+  updateSha: string | null;
+}
+
+export function autoReloadRecordPath(): string {
+  return join(stateDir(), "auto-reload.json");
+}
+
+export function loadAutoReloadRecord(path = autoReloadRecordPath()): AutoReloadRecord | null {
+  try {
+    const raw = JSON.parse(readFileSync(path, "utf8")) as Partial<AutoReloadRecord>;
+    if (typeof raw.at !== "number") return null;
+    const sha = raw.updateSha;
+    if (sha !== null && !(typeof sha === "string" && /^[0-9a-f]{40}$/.test(sha))) return null;
+    return { at: raw.at, updateSha: sha };
+  } catch {
+    return null;
+  }
+}
+
+/** false si no se pudo guardar: entonces no hay tope y zcord no se tiene que recargar solo. */
+export function saveAutoReloadRecord(record: AutoReloadRecord, path = autoReloadRecordPath()): boolean {
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify(record));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** ¿Esta versión de GitHub justifica recargar solo? Una sola vez por versión, y nunca sin saber cuál es. */
+export function autoReloadForUpdate(sha: string | null, record: AutoReloadRecord | null): boolean {
+  return sha !== null && sha !== record?.updateSha;
 }
 
 type Timer = ReturnType<typeof setTimeout>;

@@ -1,6 +1,16 @@
 import { expect, test } from "bun:test";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import { autoReloadBlockers, createAutoReloader, AUTO_RELOAD_QUIET_MS } from "../../src/app/auto-reload";
+import {
+  autoReloadBlockers,
+  autoReloadForUpdate,
+  createAutoReloader,
+  loadAutoReloadRecord,
+  saveAutoReloadRecord,
+  AUTO_RELOAD_QUIET_MS,
+} from "../../src/app/auto-reload";
 import { emptyState } from "../../src/store/store";
 import type { AppState } from "../../src/store/types";
 
@@ -105,4 +115,41 @@ test("stop cancels a pending reload", () => {
   reloader.stop();
   clock.advance(60_000);
   expect(reloads).toBe(0);
+});
+
+// G1: el lanzador puede borrar la marca sin aplicar nada (pull que no avanza, clon en otra rama): la protección
+// no puede ser la marca. Se recuerda en disco por qué versión de GitHub ya se recargó solo.
+const SHA = "a".repeat(40);
+const OTHER = "b".repeat(40);
+
+test("an update triggers an automatic reload only once per GitHub version, whatever happened to the flag", () => {
+  expect(autoReloadForUpdate(SHA, null)).toBe(true);
+  expect(autoReloadForUpdate(SHA, { at: 1, updateSha: SHA })).toBe(false);
+  expect(autoReloadForUpdate(OTHER, { at: 1, updateSha: SHA })).toBe(true);
+  expect(autoReloadForUpdate(null, null)).toBe(false); // sin saber qué versión es, no
+});
+
+test("the automatic reload record survives the reload (on disk) and a broken one is ignored", () => {
+  const dir = mkdtempSync(join(tmpdir(), "zcord-auto-reload-"));
+  const path = join(dir, "auto-reload.json");
+  expect(loadAutoReloadRecord(path)).toBeNull();
+  expect(saveAutoReloadRecord({ at: 5, updateSha: SHA }, path)).toBe(true);
+  expect(loadAutoReloadRecord(path)).toEqual({ at: 5, updateSha: SHA });
+  expect(loadAutoReloadRecord(path)).toEqual({ at: 5, updateSha: SHA }); // no se borra al leerlo
+  writeFileSync(path, "{roto");
+  expect(loadAutoReloadRecord(path)).toBeNull();
+  writeFileSync(path, JSON.stringify({ at: "x", updateSha: "../../etc" }));
+  expect(loadAutoReloadRecord(path)).toBeNull();
+});
+
+test("if the record cannot be written it says so (then zcord must not reload alone)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "zcord-auto-reload-ro-"));
+  const locked = join(dir, "locked");
+  mkdirSync(locked);
+  chmodSync(locked, 0o500);
+  try {
+    expect(saveAutoReloadRecord({ at: 5, updateSha: null }, join(locked, "sub", "auto-reload.json"))).toBe(false);
+  } finally {
+    chmodSync(locked, 0o700);
+  }
 });

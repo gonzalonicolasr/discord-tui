@@ -37,21 +37,29 @@ test("with a new version it leaves the flag for the next launch and tells the ap
   const flags: string[] = [];
   const told: number[] = [];
   const behind = fakeGit({ ...UP_TO_DATE, "rev-list --count HEAD..FETCH_HEAD": { code: 0, out: "2\n" } });
-  await scheduleUpdateCheck((n) => told.push(n), { repoDir: "/zcord", run: behind.run, env: {}, writeFlag: (t) => flags.push(t), flagExists: () => false });
+  await scheduleUpdateCheck((n) => told.push(n), { repoDir: "/zcord", run: behind.run, env: {}, writeFlag: (t) => flags.push(t) });
   expect(told).toEqual([2]);
   expect(flags).toEqual(["2\n"]);
   await scheduleUpdateCheck((n) => told.push(n), { repoDir: "/zcord", run: fakeGit(UP_TO_DATE).run, env: {}, writeFlag: (t) => flags.push(t) });
   expect(told).toEqual([2]);
 });
 
-test("it says whether the update is new or the flag was already there (the launcher could not apply it)", async () => {
-  const behind = fakeGit({ ...UP_TO_DATE, "rev-list --count HEAD..FETCH_HEAD": { code: 0, out: "2\n" } });
-  const fresh: boolean[] = [];
-  let flag = false;
-  const deps = { repoDir: "/zcord", run: behind.run, env: {}, flagExists: () => flag, writeFlag: () => void (flag = true) };
-  await scheduleUpdateCheck((_, isNew) => fresh.push(isNew), deps);
-  await scheduleUpdateCheck((_, isNew) => fresh.push(isNew), deps);
-  expect(fresh).toEqual([true, false]);
+test("it tells which GitHub version is waiting (FETCH_HEAD), even if the flag is already there or cannot be written", async () => {
+  const SHA = "c".repeat(40);
+  const behind = fakeGit({ ...UP_TO_DATE, "rev-list --count HEAD..FETCH_HEAD": { code: 0, out: "2\n" }, "rev-parse FETCH_HEAD": { code: 0, out: SHA + "\n" } });
+  const seen: Array<string | null> = [];
+  await scheduleUpdateCheck((_, sha) => seen.push(sha), { repoDir: "/zcord", run: behind.run, env: {}, writeFlag: () => {} });
+  await scheduleUpdateCheck((_, sha) => seen.push(sha), {
+    repoDir: "/zcord",
+    run: behind.run,
+    env: {},
+    writeFlag: () => {
+      throw new Error("EACCES");
+    },
+  });
+  const noSha = fakeGit({ ...UP_TO_DATE, "rev-list --count HEAD..FETCH_HEAD": { code: 0, out: "2\n" } });
+  await scheduleUpdateCheck((_, sha) => seen.push(sha), { repoDir: "/zcord", run: noSha.run, env: {}, writeFlag: () => {} });
+  expect(seen).toEqual([SHA, SHA, null]);
 });
 
 test("it looks for updates 15 s after starting and then every 30 min, until stopped", () => {

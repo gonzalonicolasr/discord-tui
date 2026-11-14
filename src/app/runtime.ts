@@ -31,8 +31,8 @@ import { createSoundPlayer, type SoundPlayer } from "../sounds/player";
 export interface RuntimeDeps {
   /** false: no buscar versión nueva en GitHub (tests). */
   checkUpdates?: boolean;
-  /** Bajó a GitHub una versión nueva que bin/zcord todavía no intentó aplicar (para recargar solo si es seguro). */
-  onUpdateAvailable?: () => void;
+  /** Hay una versión nueva en GitHub (`sha` = FETCH_HEAD, o null): main decide si recarga solo (una vez por versión). */
+  onUpdateAvailable?: (sha: string | null) => void;
   session: Session;
   me: { id: string; username: string };
   props: ClientProps;
@@ -213,14 +213,14 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     deps.checkUpdates === false
       ? () => {}
       : startUpdateChecks(() => {
-          void scheduleUpdateCheck((behind, isNew) => {
+          void scheduleUpdateCheck((behind, sha) => {
             store.dispatch({
               type: "notice/push",
               key: "update-available",
               level: "warn",
               text: `Hay una versión nueva de zcord (${behind} cambio${behind === 1 ? "" : "s"}): Ctrl+R la instala y recarga (o se instala sola la próxima vez que lo abras).`,
             });
-            if (isNew) deps.onUpdateAvailable?.();
+            deps.onUpdateAvailable?.(sha);
           });
         });
 

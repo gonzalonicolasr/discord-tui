@@ -22,9 +22,12 @@ async function setup() {
         actions={actions}
         onQuit={() => {}}
         onReload={() => void (reloads += 1)}
-        onCodeChange={(listener) => {
-          codeChanged = listener;
-          return () => {};
+        autoReload={{
+          onChange: (listener) => {
+            codeChanged = listener;
+            return () => {};
+          },
+          reload: () => void (reloads += 1),
         }}
         deps={deps as never}
       />

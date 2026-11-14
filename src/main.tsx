@@ -5,6 +5,7 @@ import { KITTY_IMAGE_TRANSPORT, KITTY_KEYBOARD, logKittyTransport } from "./ui/k
 import { boot } from "./app/boot";
 import { Root } from "./app/root";
 import { createRuntime, type Runtime } from "./app/runtime";
+import { autoReloadForUpdate, loadAutoReloadRecord, saveAutoReloadRecord } from "./app/auto-reload";
 import { captureReloadState, RELOAD_EXIT_CODE, restoreAfterReload, saveReloadState, takeReloadState, watchForCodeChanges } from "./app/reload";
 import { deleteSession, loadSession, type Session } from "./auth/session";
 import { validateToken } from "./auth/token-login";
@@ -106,13 +107,32 @@ async function main(): Promise<void> {
     codeListeners.add(listener);
     return () => codeListeners.delete(listener);
   };
+  // Tope contra bucles, en disco: una recarga automática por versión de GitHub (SHA de FETCH_HEAD). Si no se puede
+  // guardar, no se recarga solo (queda Ctrl+R).
+  const lastAutoReload = loadAutoReloadRecord();
+  let pendingUpdateSha: string | null = null;
+  const autoReload = {
+    onChange: onCodeChange,
+    reload: (active: Runtime): void => {
+      const updateSha = pendingUpdateSha ?? lastAutoReload?.updateSha ?? null;
+      if (!saveAutoReloadRecord({ at: Date.now(), updateSha })) {
+        active.store.dispatch({ type: "notice/push", key: "code-changed", level: "warn", text: "Hay cambios en zcord: Ctrl+R para recargar sin salir." });
+        return;
+      }
+      reload(active);
+    },
+  };
   const runtime = createRuntime({
     session,
     me,
     props: clientProps,
     initialSettings: settings,
     kittyKeyboard,
-    onUpdateAvailable: codeChanged,
+    onUpdateAvailable: (sha) => {
+      if (!autoReloadForUpdate(sha, lastAutoReload)) return;
+      pendingUpdateSha = sha;
+      codeChanged();
+    },
   });
   const saved = takeReloadState();
   if (saved) restoreAfterReload(runtime.store, runtime.actions as never, saved);
@@ -126,7 +146,7 @@ async function main(): Promise<void> {
         initialRuntime={runtime}
         onQuit={quit}
         onReload={canReload ? reload : undefined}
-        onCodeChange={canReload ? onCodeChange : undefined}
+        autoReload={canReload ? autoReload : undefined}
         kittyKeyboard={kittyKeyboard}
       />
     ),

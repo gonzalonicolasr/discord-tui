@@ -103,8 +103,11 @@ export function App(props: {
   onQuit: () => void;
   /** Ctrl+R: recargar zcord sin salir de la terminal (solo con bin/zcord). */
   onReload?: () => void;
-  /** Avisa cuando cambia el código de zcord (o bajó una actualización): si es seguro, se recarga solo. */
-  onCodeChange?: (listener: () => void) => () => void;
+  /**
+   * Recarga sola cuando cambia el código de zcord o hay una versión nueva (solo con bin/zcord): `onChange` avisa del
+   * cambio y `reload` guarda el tope de recargas automáticas y recarga como Ctrl+R.
+   */
+  autoReload?: { onChange(listener: () => void): () => void; reload(): void };
   settingsDeps?: SettingsDeps;
   deps?: Partial<AppDeps>;
   onActivity?(): void;
@@ -653,7 +656,8 @@ export function App(props: {
   renderer.stdin?.on("data", onRawInput);
   onCleanup(() => renderer.stdin?.off("data", onRawInput));
   onMount(() => {
-    if (!props.onCodeChange || !props.onReload) return;
+    const auto = props.autoReload;
+    if (!auto) return;
     let lastWaiting = "";
     const reloader = createAutoReloader({
       blockers: () =>
@@ -673,10 +677,10 @@ export function App(props: {
       reload: () => {
         log.info("app.auto-reload", {});
         flash("hay código nuevo: recargando zcord…");
-        props.onReload?.();
+        auto.reload();
       },
     });
-    const off = props.onCodeChange(() => reloader.changed());
+    const off = auto.onChange(() => reloader.changed());
     onCleanup(() => {
       off();
       reloader.stop();

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { stateDir } from "../config/paths";
@@ -47,16 +47,23 @@ export async function checkForUpdate(opts: { repoDir?: string; run?: Run; env?: 
 }
 
 /**
- * Chequea en segundo plano; si hay versión nueva deja la marca para el próximo arranque y avisa. `isNew` es false
- * si la marca ya estaba (este proceso ya avisó, o bin/zcord no la pudo aplicar al abrir): ahí no sirve recargar solo.
+ * Chequea en segundo plano; si hay versión nueva deja la marca para el próximo arranque y avisa con el SHA de
+ * FETCH_HEAD (la versión que espera en GitHub; null si no se pudo leer): con eso se recarga solo una vez por versión.
  */
 export async function scheduleUpdateCheck(
-  onAvailable: (behind: number, isNew: boolean) => void,
-  deps: Parameters<typeof checkForUpdate>[0] & { writeFlag?: (text: string) => void; flagExists?: () => boolean } = {},
+  onAvailable: (behind: number, sha: string | null) => void,
+  deps: Parameters<typeof checkForUpdate>[0] & { writeFlag?: (text: string) => void } = {},
 ): Promise<void> {
   const behind = await checkForUpdate(deps);
   if (behind === null || behind <= 0) return;
-  const isNew = !(deps.flagExists ?? (() => existsSync(updateFlagPath())))();
+  let sha: string | null = null;
+  try {
+    const head = await (deps.run ?? defaultRun)(["git", "-C", deps.repoDir ?? (deps.env ?? process.env).ZCORD_HOME ?? "", "rev-parse", "FETCH_HEAD"]);
+    const out = head.out.trim();
+    if (head.code === 0 && /^[0-9a-f]{40}$/.test(out)) sha = out;
+  } catch {
+    // sin SHA: se avisa, pero no se recarga solo
+  }
   try {
     (deps.writeFlag ?? ((text: string) => {
       mkdirSync(stateDir(), { recursive: true });
@@ -66,7 +73,7 @@ export async function scheduleUpdateCheck(
     // sin marca: igual se avisa
   }
   log.info("update.available", { count: behind });
-  onAvailable(behind, isNew);
+  onAvailable(behind, sha);
 }
 
 /** Primera búsqueda un rato después de arrancar (sin apurar la conexión) y después cada 30 min. Devuelve el stop. */
