@@ -132,9 +132,12 @@ export function applyPage(
     ids.add(message.id);
   }
   const ordered = [...ids].sort(compareSnowflakes);
-  const trimmed = ordered.length > RING_SIZE ? ordered.slice(ordered.length - RING_SIZE) : ordered;
+  // Una página vieja recorta por el lado nuevo (si no, se tira justo lo que se acaba de traer); el resto, por el viejo.
+  const overflow = Math.max(0, ordered.length - RING_SIZE);
+  const fromNewest = mode === "older" && overflow > 0;
+  const trimmed = fromNewest ? ordered.slice(0, RING_SIZE) : ordered.slice(overflow);
   // Lo que quedó fuera del anillo se suelta también de byId (si no, una sesión larga acumula mensajes sin techo).
-  if (trimmed.length < ordered.length) for (const id of ordered.slice(0, ordered.length - trimmed.length)) delete byId[id];
+  for (const id of fromNewest ? ordered.slice(RING_SIZE) : ordered.slice(0, overflow)) delete byId[id];
 
   return {
     ...state,
@@ -146,7 +149,8 @@ export function applyPage(
         byId,
         loadingOlder: false,
         hasMoreBefore: mode === "older" ? messages.length >= 50 : previous.hasMoreBefore,
-        stale: false,
+        // Sin los más nuevos, el slice ya no es la última página: al volver a abrir el canal se pide de nuevo.
+        stale: fromNewest,
       },
     },
   };
