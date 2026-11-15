@@ -1,5 +1,6 @@
 import { FRAME_SAMPLES } from "./constants";
-import { createWasmOpus } from "./opus-wasm";
+import { log } from "../log/logger";
+import { createWasmOpus, isWasmTrap } from "./opus-wasm";
 
 export interface OpusCodec {
   encode(pcm: Uint8Array): Uint8Array;
@@ -76,22 +77,43 @@ export function createOpusCodec(opts?: { prefer?: "native" | "wasm" }): OpusCode
     throw new Error(`no pude cargar Opus (ni @discordjs/opus ni opusscript${lastLoadError ? `: ${lastLoadError.slice(0, 120)}` : ""})`);
   }
 
-  const opus = engine;
+  let opus = engine;
   const which = backend;
+
+  /**
+   * El módulo WASM es uno para todos los códecs: si trapea queda roto (y los decoders de todos y el encoder del mic
+   * fallarían hasta cerrar zcord). Ese paquete se pierde, pero el códec sigue en un módulo nuevo (estado de cero).
+   */
+  function recover(error: unknown): never {
+    if (which === "wasm" && isWasmTrap(error)) {
+      const fresh = loadWasm();
+      log.warn("voice.codec-reset", { error_name: "RuntimeError", state: fresh ? "recreated" : "failed" });
+      if (fresh) opus = fresh;
+    }
+    throw error;
+  }
 
   return {
     backend: which,
     encode(pcm: Uint8Array): Uint8Array {
-      const out = opus.encode(Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength), FRAME_SAMPLES);
-      return new Uint8Array(out);
+      try {
+        const out = opus.encode(Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength), FRAME_SAMPLES);
+        return new Uint8Array(out);
+      } catch (error) {
+        return recover(error);
+      }
     },
     destroy(): void {
       if (which === "wasm") (opus as WasmOpus).delete();
     },
     decode(opusPacket: Uint8Array): Uint8Array {
       const input = Buffer.from(opusPacket.buffer, opusPacket.byteOffset, opusPacket.byteLength);
-      const out = which === "native" ? (opus as NativeOpus).decode(input, FRAME_SAMPLES) : (opus as WasmOpus).decode(input);
-      return new Uint8Array(out);
+      try {
+        const out = which === "native" ? (opus as NativeOpus).decode(input, FRAME_SAMPLES) : (opus as WasmOpus).decode(input);
+        return new Uint8Array(out);
+      } catch (error) {
+        return recover(error);
+      }
     },
   };
 }

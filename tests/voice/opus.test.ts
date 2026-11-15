@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
 import { createOpusCodec } from "../../src/voice/opus";
-import { createWasmOpus } from "../../src/voice/opus-wasm";
+import { createWasmOpus, setWasmModuleFactoryForTests } from "../../src/voice/opus-wasm";
+import { fakeOpusModule } from "../helpers/fake-opus-module";
 import { FRAME_BYTES, bestCorrelation, sampleAt, silence, sine440 } from "../helpers/pcm";
 
 function rms(pcm: Uint8Array): number {
@@ -114,4 +115,29 @@ test("the encoder rejects a frame size Opus cannot encode here or that does not 
   expect(codec.encode(pcmFor(960), 960).length).toBeGreaterThan(0);
   expect(codec.encode(pcmFor(2880), 2880).length).toBeGreaterThan(0);
   codec.delete();
+});
+
+test("after a trap in the shared WASM module, that codec and the next ones move to a fresh module", () => {
+  let modules = 0;
+  setWasmModuleFactoryForTests(() => {
+    modules += 1;
+    return fakeOpusModule({ trapOn: 0xee });
+  });
+  try {
+    const a = createOpusCodec({ prefer: "wasm" });
+    const b = createOpusCodec({ prefer: "wasm" });
+    expect(modules).toBe(1);
+    // Ese paquete se pierde, pero el códec sigue andando sobre un módulo nuevo.
+    expect(() => a.decode(Uint8Array.of(0xee))).toThrow(WebAssembly.RuntimeError);
+    expect(a.decode(Uint8Array.of(1)).length).toBe(3840);
+    expect(modules).toBe(2);
+    expect(createOpusCodec({ prefer: "wasm" }).decode(Uint8Array.of(1)).length).toBe(3840);
+    expect(modules).toBe(2);
+    // El que estaba en el módulo roto se muda en su primer uso (también el encoder del micrófono).
+    expect(() => b.encode(new Uint8Array(3840))).toThrow(WebAssembly.RuntimeError);
+    expect(b.encode(new Uint8Array(3840)).length).toBe(1);
+    expect(modules).toBe(2);
+  } finally {
+    setWasmModuleFactoryForTests(null);
+  }
 });

@@ -39,12 +39,30 @@ const MAX_PACKET_BYTES = 1276 * 3;
  */
 const ENCODER_FRAME_SAMPLES = new Set([120, 240, 480, 960, 1920, 2880]);
 
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const opusscriptModule = (): NativeModule => require("opusscript/build/opusscript_native_wasm.js")() as NativeModule;
+let factory: () => NativeModule = opusscriptModule;
 let native: NativeModule | null = null;
 
 function load(): NativeModule {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  native ??= require("opusscript/build/opusscript_native_wasm.js")() as NativeModule;
+  native ??= factory();
   return native;
+}
+
+/** Un trap de WASM (heap pisado, `Aborted()`): ese módulo ya no es confiable para nadie. */
+export function isWasmTrap(error: unknown): boolean {
+  return error instanceof WebAssembly.RuntimeError;
+}
+
+/** Los códecs que se creen después usan un módulo nuevo; los del roto se mudan solos (ver opus.ts). */
+function discard(m: NativeModule): void {
+  if (native === m) native = null;
+}
+
+/** Solo tests: cómo se crea el módulo WASM (null = el de opusscript). Descarta el módulo actual. */
+export function setWasmModuleFactoryForTests(fn: (() => NativeModule) | null): void {
+  factory = fn ?? opusscriptModule;
+  native = null;
 }
 
 export interface WasmOpus {
@@ -55,14 +73,37 @@ export interface WasmOpus {
 
 export function createWasmOpus(channels = 2): WasmOpus {
   const m = load();
-  const handler = new m.OpusScriptHandler(48_000, channels, APPLICATION_AUDIO);
   const pcmBytes = MAX_FRAME_SAMPLES * channels * 2;
-  // Un u16 por cada byte de PCM: el doble de memoria, alineada a 2 (malloc alinea a 8).
-  const inPcm = m._malloc(pcmBytes * 2);
-  const outPcm = m._malloc(pcmBytes * 2);
-  const inPacket = m._malloc(MAX_PACKET_BYTES);
-  const outPacket = m._malloc(MAX_PACKET_BYTES);
+  let handler: NativeHandler;
+  let inPcm: number;
+  let outPcm: number;
+  let inPacket: number;
+  let outPacket: number;
+  try {
+    handler = new m.OpusScriptHandler(48_000, channels, APPLICATION_AUDIO);
+    // Un u16 por cada byte de PCM: el doble de memoria, alineada a 2 (malloc alinea a 8).
+    inPcm = m._malloc(pcmBytes * 2);
+    outPcm = m._malloc(pcmBytes * 2);
+    inPacket = m._malloc(MAX_PACKET_BYTES);
+    outPacket = m._malloc(MAX_PACKET_BYTES);
+  } catch (error) {
+    if (isWasmTrap(error)) discard(m);
+    throw error;
+  }
   let alive = true;
+
+  /** Llama al C++; si trapea, este códec y su módulo quedan descartados (no se vuelve a entrar al módulo roto). */
+  function call<T>(fn: () => T): T {
+    try {
+      return fn();
+    } catch (error) {
+      if (isWasmTrap(error)) {
+        alive = false;
+        discard(m);
+      }
+      throw error;
+    }
+  }
 
   return {
     encode(pcm: Uint8Array, frameSize: number): Uint8Array {
@@ -70,7 +111,7 @@ export function createWasmOpus(channels = 2): WasmOpus {
       if (!ENCODER_FRAME_SAMPLES.has(frameSize)) throw new RangeError(`frameSize ${frameSize} no válido para el encoder`);
       if (pcm.byteLength !== frameSize * channels * 2) throw new RangeError("el PCM no coincide con el frameSize");
       m.HEAPU16.set(pcm, inPcm >> 1);
-      const length = handler._encode(inPcm, pcm.byteLength, outPacket, frameSize);
+      const length = call(() => handler._encode(inPcm, pcm.byteLength, outPacket, frameSize));
       if (length < 0) throw new Error(`Encode error: ${length}`);
       return m.HEAPU8.slice(outPacket, outPacket + length);
     },
@@ -78,7 +119,7 @@ export function createWasmOpus(channels = 2): WasmOpus {
       if (!alive) throw new Error("códec liberado");
       if (packet.byteLength > MAX_PACKET_BYTES) throw new RangeError("paquete Opus demasiado grande");
       m.HEAPU8.set(packet, inPacket);
-      const samples = handler._decode(inPacket, packet.byteLength, outPcm);
+      const samples = call(() => handler._decode(inPacket, packet.byteLength, outPcm));
       if (samples < 0) throw new Error(`Decode error: ${samples}`);
       const bytes = samples * channels * 2;
       return Uint8Array.from(m.HEAPU16.subarray(outPcm >> 1, (outPcm >> 1) + bytes));
@@ -86,8 +127,10 @@ export function createWasmOpus(channels = 2): WasmOpus {
     delete(): void {
       if (!alive) return;
       alive = false;
-      m.OpusScriptHandler.destroy_handler(handler);
-      for (const ptr of [inPcm, outPcm, inPacket, outPacket]) m._free(ptr);
+      call(() => {
+        m.OpusScriptHandler.destroy_handler(handler);
+        for (const ptr of [inPcm, outPcm, inPacket, outPacket]) m._free(ptr);
+      });
     },
   };
 }
