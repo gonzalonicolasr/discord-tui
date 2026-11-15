@@ -5,7 +5,6 @@ export interface VoiceDiagnostics {
   underruns?: number;
   jitterDrops?: number;
   jitterMsMax?: number;
-  concealed?: number;
   arrivalP95Ms?: number;
   arrivalMaxMs?: number;
   lateTicks?: number;
@@ -19,7 +18,6 @@ const DIAGNOSTIC_FIELDS: Record<keyof VoiceDiagnostics, AllowedField> = {
   underruns: "underruns",
   jitterDrops: "jitter_drops",
   jitterMsMax: "jitter_ms_max",
-  concealed: "concealed",
   arrivalP95Ms: "arrival_p95_ms",
   arrivalMaxMs: "arrival_max_ms",
   lateTicks: "late_ticks",

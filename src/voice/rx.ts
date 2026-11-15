@@ -41,8 +41,7 @@ const ARRIVAL_MAX_MS = 1_000;
 export function createReceiver(deps: {
   session: Pick<VoiceSession, "onOpus" | "onSpeaking">;
   mixer: Pick<Mixer, "buffer" | "remove">;
-  /** `conceal` (PLC de Opus), si el decoder lo tiene, tapa los frames que faltan a mitad de una frase. */
-  makeDecoder: () => { decode(opus: Uint8Array): Uint8Array; conceal?(): Uint8Array; destroy?(): void };
+  makeDecoder: () => { decode(opus: Uint8Array): Uint8Array; destroy?(): void };
   /** Si no se pudo crear un decoder (para loguear el motivo): a lo sumo una vez por minuto, con cuántos fallaron. */
   onDecoderError?(error: unknown, failures: number): void;
   /**
@@ -60,7 +59,7 @@ export function createReceiver(deps: {
   const setTimer = deps.setTimer ?? setTimeout;
   const clearTimer = deps.clearTimer ?? clearTimeout;
   const now = deps.now ?? Date.now;
-  const decoders = new Map<string, { decode(opus: Uint8Array): Uint8Array; conceal?(): Uint8Array; destroy?(): void }>();
+  const decoders = new Map<string, { decode(opus: Uint8Array): Uint8Array; destroy?(): void }>();
   /** userId → hasta cuándo no reintentar crear su decoder (no reintentar en cada paquete). */
   const failedUntil = new Map<string, number>();
   /** userId → último paquete con voz (para liberar los decoders de los que ya no hablan). */
@@ -181,9 +180,6 @@ export function createReceiver(deps: {
       }
       failedUntil.delete(userId);
       decoders.set(userId, decoder);
-      // El PLC se pide al decoder actual de esa persona en el momento del hueco (en orden: todo lo que llegó ya se
-      // decodificó, así el decoder sabe que falta el paquete siguiente).
-      if (decoder.conceal) deps.mixer.buffer(userId).setConcealer?.(() => decoders.get(userId)?.conceal?.() ?? null);
     }
     lastHeard.set(userId, at);
     try {

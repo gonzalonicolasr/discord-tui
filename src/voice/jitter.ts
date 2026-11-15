@@ -1,5 +1,3 @@
-import { FRAME_BYTES } from "./constants";
-
 export interface JitterStats {
   /** Veces que se vació a mitad de una frase (no al terminar de hablar). */
   underruns: number;
@@ -7,8 +5,6 @@ export interface JitterStats {
   drops: number;
   /** Colchón aprendido para arrancar cada frase, en frames de 20 ms. */
   targetFrames: number;
-  /** Frames que faltaban a mitad de una frase y se taparon con el PLC de Opus en vez de un hueco. */
-  concealed: number;
 }
 
 export interface JitterBuffer {
@@ -20,26 +16,12 @@ export interface JitterBuffer {
   end?(): void;
   /** Contadores desde la última lectura (y los pone en cero). */
   takeStats?(): JitterStats;
-  /**
-   * PLC: de dónde sacar audio para tapar un frame que falta a mitad de una frase (el decoder de esa persona; puede
-   * devolver varios frames juntos, p. ej. los 120 ms del WASM). null = sin PLC: el hueco queda en silencio.
-   */
-  setConcealer?(fn: (() => Uint8Array | null) | null): void;
 }
 
 /** Si el audio vuelve dentro de este rato (en slots de 20 ms) después de vaciarse, se cuenta como corte. */
 const UNDERRUN_SLOTS = 25;
 /** Tope del colchón aprendido: 200 ms. */
 const MAX_TARGET_FRAMES = 10;
-/** Como mucho se tapan 60 ms seguidos con PLC; más que eso es un corte de verdad (y el PLC ya se apagó). */
-const MAX_CONCEALED_FRAMES = 3;
-/**
- * Slots vacíos que se esperan antes de pedir PLC. Pedirlo avanza el decoder 120 ms: si el paquete solo venía tarde
- * (lo más común con jitter), al llegar se decodificaría muy mal (~3 dB de SNR en vez de > 60). Si aparece en este
- * rato, el decoder no se tocó. También evita una "cola" de PLC cuando el aviso de fin de frase llega un poco tarde.
- */
-const PLC_WAIT_SLOTS = 2;
-
 /** Si en este rato de voz (500 × 20 ms = 10 s) no hizo falta tanto colchón, baja un frame. */
 const STABLE_POPS = 500;
 
@@ -80,33 +62,7 @@ export function createJitterBuffer(opts?: {
   let stablePops = 0;
   let underruns = 0;
   let drops = 0;
-  let concealed = 0;
   let targetMax = target;
-  let concealer: (() => Uint8Array | null) | null = null;
-  /** Frames de PLC de este hueco que todavía no se usaron, y cuántos se usaron. */
-  let plc: Uint8Array[] = [];
-  let concealRun = 0;
-
-  /** Un frame de PLC para el slot actual, o null si no hay PLC o ya se tapó todo lo que se puede. */
-  function concealFrame(): Uint8Array | null {
-    if (!concealer || concealRun >= MAX_CONCEALED_FRAMES) return null;
-    if (concealRun === 0) {
-      let pcm: Uint8Array | null = null;
-      try {
-        pcm = concealer();
-      } catch {
-        pcm = null;
-      }
-      plc = [];
-      for (let offset = 0; pcm && offset + FRAME_BYTES <= pcm.byteLength; offset += FRAME_BYTES)
-        plc.push(pcm.subarray(offset, offset + FRAME_BYTES));
-    }
-    const frame = plc[concealRun];
-    if (!frame) return null;
-    concealRun += 1;
-    concealed += 1;
-    return frame;
-  }
 
   const phraseThreshold = (): number => Math.max(rebufferFrames, target);
 
@@ -128,12 +84,6 @@ export function createJitterBuffer(opts?: {
       }
       sincePush = 0;
       frames.push(pcm);
-      // Volvió el audio mientras se tapaba el hueco con PLC: se sigue enseguida, sin esperar a rebufferear.
-      if (concealRun > 0) {
-        primed = true;
-        concealRun = 0;
-        plc = [];
-      }
       // El tope crece lo mismo que creció el colchón aprendido.
       const cap = maxFrames + (target - rebufferFrames);
       while (frames.length > cap) {
@@ -148,8 +98,7 @@ export function createJitterBuffer(opts?: {
         if (playing && talking) starvedFor = 0;
         else if (starvedFor !== null && ++starvedFor >= UNDERRUN_SLOTS) starvedFor = null;
         playing = false;
-        // A mitad de una frase, mejor el audio que Opus estima que un hueco de silencio.
-        return talking && starvedFor !== null && starvedFor >= PLC_WAIT_SLOTS ? concealFrame() : null;
+        return null;
       }
       const frame = frames.shift();
       playing = true;
@@ -178,8 +127,6 @@ export function createJitterBuffer(opts?: {
       sincePush = null;
       neededInWindow = 0;
       stablePops = 0;
-      concealRun = 0;
-      plc = [];
       target = rebufferFrames;
       threshold = prebufferFrames;
     },
@@ -188,19 +135,13 @@ export function createJitterBuffer(opts?: {
       starvedFor = null;
       sincePush = null;
       // No viene más audio de esta frase: lo que espera para juntar el colchón suena ya, no al empezar la próxima.
-      concealRun = 0;
-      plc = [];
       if (frames.length > 0) primed = true;
       else if (!primed) threshold = Math.max(threshold, phraseThreshold());
     },
-    setConcealer(fn): void {
-      concealer = fn;
-    },
     takeStats(): JitterStats {
-      const out = { underruns, drops, targetFrames: targetMax, concealed };
+      const out = { underruns, drops, targetFrames: targetMax };
       underruns = 0;
       drops = 0;
-      concealed = 0;
       targetMax = target;
       return out;
     },

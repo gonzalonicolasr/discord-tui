@@ -293,8 +293,8 @@ describe("mixer diagnostics", () => {
     h.advance(20); // a tiempo
     h.advance(65); // 3 slots juntos: atraso de 45 ms
     h.advance(200); // 10 slots (quedaban 5 ms del anterior): se mezclan 5 y se saltean 5, 185 ms tarde
-    expect(h.mixer.stats()).toEqual({ underruns: 0, jitterDrops: 0, jitterMsMax: 0, concealed: 0, lateTicks: 2, skippedFrames: 5, loopLagMaxMs: 185 });
-    expect(h.mixer.stats()).toEqual({ underruns: 0, jitterDrops: 0, jitterMsMax: 0, concealed: 0, lateTicks: 0, skippedFrames: 0, loopLagMaxMs: 0 });
+    expect(h.mixer.stats()).toEqual({ underruns: 0, jitterDrops: 0, jitterMsMax: 0, lateTicks: 2, skippedFrames: 5, loopLagMaxMs: 185 });
+    expect(h.mixer.stats()).toEqual({ underruns: 0, jitterDrops: 0, jitterMsMax: 0, lateTicks: 0, skippedFrames: 0, loopLagMaxMs: 0 });
   });
 
   test("jitter buffer underruns of everyone (including people who were removed) are added up", () => {

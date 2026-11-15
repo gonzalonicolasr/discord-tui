@@ -17,7 +17,7 @@ import { outputLabel, type AudioDevice } from "../voice/devices";
 export interface VoiceMedia {
   startCapture(opts?: { target?: string }): Promise<AudioCapture>;
   startPlayback(opts?: { target?: string }): Promise<AudioPlayback>;
-  createCodec(): { encode(pcm: Uint8Array): Uint8Array; decode(opus: Uint8Array): Uint8Array; conceal?(): Uint8Array; destroy?(): void };
+  createCodec(): { encode(pcm: Uint8Array): Uint8Array; decode(opus: Uint8Array): Uint8Array; destroy?(): void };
   createVad(opts: { sensitivity: "auto" | number }): Vad;
   /** Salidas de audio (para mostrar por dónde sale la llamada y poder cambiarla). */
   listAudioDevices?(): Promise<{ outputs: AudioDevice[]; defaultOutput?: string | null }>;

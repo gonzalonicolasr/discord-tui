@@ -4,7 +4,6 @@ import { createMixer } from "../../src/voice/mixer";
 import { pcmOf, sampleAt } from "../helpers/pcm";
 
 const FRAME_MS = 20;
-const CONCEALED = 7;
 
 /**
  * Llamada simulada con reloj falso, de a 1 ms. Una persona habla en frases (1,5 s de voz y 0,5 s de silencio, como
@@ -19,8 +18,6 @@ function simulate(opts: {
   arrival?: (sentAt: number) => number | null;
   /** Pausas del event loop: [desde, duración] en ms. */
   stalls?: [number, number][];
-  /** El decoder tiene PLC (como el WASM): devuelve 120 ms de "relleno" (muestras en CONCEALED). */
-  conceal?: boolean;
 }) {
   let t = 0;
   let tick = null as (() => void) | null;
@@ -50,7 +47,6 @@ function simulate(opts: {
   events.sort((a, b) => a.at - b.at);
   const stalled = (ms: number) => (opts.stalls ?? []).some(([from, length]) => ms >= from && ms < from + length);
 
-  if (opts.conceal) mixer.buffer("u").setConcealer?.(() => new Uint8Array(new Int16Array(6 * 1920).fill(CONCEALED).buffer));
   const played: number[] = [];
   let deviceAt: number | null = null;
   mixer.start();
@@ -79,7 +75,7 @@ function simulate(opts: {
   /**
    * Frames que se oyen sin la voz en medio de una frase (lo que Gon oye como "se corta"), desde `fromPhrase`.
    * `silence`: zcord escribió silencio (jitter buffer vacío o silencio metido por el mixer); `starved`: pw-cat se
-   * quedó sin datos (zcord trabado más que su colchón); `all`: cualquier cosa que no sea la voz (también el PLC).
+   * quedó sin datos (zcord trabado más que su colchón); `all`: los dos.
    */
   const cuts = (fromPhrase = 0, kind: "all" | "silence" | "starved" = "all") => {
     let total = 0;
@@ -89,7 +85,8 @@ function simulate(opts: {
       if (first === -1) continue;
       for (let i = first; i <= last; i += 1) {
         if (played[i] === 100 + phrase) continue;
-        if (kind === "all" || (kind === "starved" && played[i] === -1) || (kind === "silence" && played[i] === 0)) total += 1;
+        const starved = played[i] === -1;
+        if (kind === "all" || (kind === "starved") === starved) total += 1;
       }
     }
     return total;

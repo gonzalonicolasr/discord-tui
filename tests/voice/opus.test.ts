@@ -158,27 +158,3 @@ test("codecs on a dropped WASM module move too even if that module answers with 
     setWasmModuleFactoryForTests(null);
   }
 });
-
-test("PLC: conceal() gives 120 ms that continue the voice without a click and leaves the other codecs alone", () => {
-  const encoder = createOpusCodec({ prefer: "wasm" });
-  const decoder = createOpusCodec({ prefer: "wasm" });
-  const neighbours = Array.from({ length: 8 }, () => createOpusCodec({ prefer: "wasm" }));
-  const packets = Array.from({ length: 8 }, () => encoder.encode(sine440()));
-  let last: Uint8Array = new Uint8Array(0);
-  for (const p of packets.slice(0, 6)) last = decoder.decode(p);
-
-  const plc = decoder.conceal!();
-
-  expect(plc.length).toBe(FRAME_BYTES * 6);
-  // El primer frame tapado sigue la onda: el salto con el último frame real es chico (un hueco de silencio no).
-  const jump = Math.abs(sampleAt(plc, 0) - sampleAt(last, last.length / 2 - 2));
-  expect(jump).toBeLessThan(2000);
-  expect(rms(plc.subarray(0, FRAME_BYTES))).toBeGreaterThan(1000);
-  // Después del PLC el decoder sigue decodificando paquetes reales.
-  expect(rms(decoder.decode(packets[6]!))).toBeGreaterThan(500);
-  for (const codec of neighbours) {
-    codec.decode(packets[0]!);
-    expect(rms(codec.decode(packets[1]!))).toBeGreaterThan(1000);
-  }
-  for (const codec of [...neighbours, decoder, encoder]) codec.destroy();
-});
