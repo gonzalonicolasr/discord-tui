@@ -134,7 +134,9 @@ export function createJitterBuffer(opts?: {
       talking = false;
       starvedFor = null;
       sincePush = null;
-      if (!primed) threshold = Math.max(threshold, phraseThreshold());
+      // No viene más audio de esta frase: lo que espera para juntar el colchón suena ya, no al empezar la próxima.
+      if (frames.length > 0) primed = true;
+      else if (!primed) threshold = Math.max(threshold, phraseThreshold());
     },
     takeStats(): JitterStats {
       const out = { underruns, drops, targetFrames: targetMax };

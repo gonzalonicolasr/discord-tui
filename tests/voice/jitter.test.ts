@@ -152,3 +152,18 @@ describe("adaptive jitter buffer", () => {
     expect(jb.takeStats!().targetFrames).toBe(2);
   });
 });
+
+test("when the phrase ends, the frames still waiting for the cushion play right away instead of at the next phrase", () => {
+  const jb = createJitterBuffer({ prebufferFrames: 3, rebufferFrames: 2 });
+  // Un "sí" corto: 2 frames, menos que el colchón para arrancar, y termina la frase.
+  jb.push(pcmOf(1));
+  jb.push(pcmOf(2));
+  expect(jb.pop()).toBeNull();
+  jb.end!();
+  expect(sampleAt(jb.pop()!, 0)).toBe(1);
+  expect(sampleAt(jb.pop()!, 0)).toBe(2);
+  expect(jb.pop()).toBeNull();
+  // La frase siguiente vuelve a juntar su colchón.
+  jb.push(pcmOf(3));
+  expect(jb.pop()).toBeNull();
+});
