@@ -11,8 +11,10 @@ const VOICE_B = "100000000000000004";
 const TEXT = "100000000000000002";
 const ME = "100000000000000010";
 
-function setup(opts: { micFails?: boolean; stream?: boolean } = {}) {
+function setup(opts: { micFails?: boolean; stream?: boolean; joinMuted?: boolean } = {}) {
   const store = createStore(emptyState());
+  // Los tests de siempre corren con "entrar silenciado" apagado (= comportamiento de antes); los de esa regla lo prenden.
+  store.dispatch({ type: "settings/set", patch: { joinMuted: opts.joinMuted ?? false } });
   store.dispatch({
     type: "gw",
     t: "READY",
@@ -126,6 +128,77 @@ test("mute state carries into the next join", async () => {
   voice.toggleMute();
   await voice.toggleVoice(VOICE_A);
   expect(calls).toEqual([`join:${VOICE_A}:true:false`]);
+});
+
+describe("join muted", () => {
+  test("on (the default), joining a channel by choice starts with the mic closed and Discord sees it", async () => {
+    const store = createStore(emptyState());
+    expect(store.getState().settings.joinMuted).toBe(true);
+    const { voice, calls, store: s } = setup({ joinMuted: true });
+    await voice.toggleVoice(VOICE_A);
+    expect(calls).toEqual([`join:${VOICE_A}:true:false`]);
+    expect(s.getState().voice).toMatchObject({ channelId: VOICE_A, selfMute: true, selfDeaf: false });
+  });
+
+  test("switching to another channel by choice also enters muted, even if the mic was open in the old one", async () => {
+    const { voice, calls } = setup({ joinMuted: true });
+    await voice.toggleVoice(VOICE_A);
+    voice.toggleMute();
+    await voice.toggleVoice(VOICE_B);
+    expect(calls).toEqual([`join:${VOICE_A}:true:false`, "flags:false:false", "leave", `join:${VOICE_B}:true:false`]);
+  });
+
+  test("deafened stays deafened (and muted) on join, and undeafen still restores the mute from before", async () => {
+    const { voice, store, calls } = setup({ joinMuted: true });
+    voice.toggleDeaf();
+    await voice.toggleVoice(VOICE_A);
+    expect(calls).toEqual([`join:${VOICE_A}:true:true`]);
+    voice.toggleDeaf();
+    expect(store.getState().voice).toMatchObject({ selfMute: false, selfDeaf: false });
+  });
+
+  test("being moved by a moderator keeps the mic as it was (open)", async () => {
+    const { voice, store, calls } = setup({ joinMuted: true });
+    await voice.toggleVoice(VOICE_A);
+    voice.toggleMute();
+    store.dispatch({ type: "gw", t: "VOICE_STATE_UPDATE", d: { guild_id: GUILD, user_id: ME, channel_id: VOICE_A } });
+    store.dispatch({ type: "gw", t: "VOICE_STATE_UPDATE", d: { guild_id: GUILD, user_id: ME, channel_id: VOICE_B } });
+    await Bun.sleep(5);
+    expect(store.getState().voice).toMatchObject({ channelId: VOICE_B, selfMute: false });
+    expect(calls).toContain(`join:${VOICE_B}:false:false`);
+  });
+
+  test("a reconnect of the session keeps the mic as it was (open)", async () => {
+    const { voice, store, calls, emit } = setup({ joinMuted: true });
+    await voice.toggleVoice(VOICE_A);
+    voice.toggleMute();
+    emit("reconnecting");
+    emit("connected");
+    await Bun.sleep(5);
+    expect(store.getState().voice).toMatchObject({ channelId: VOICE_A, status: "connected", selfMute: false });
+    expect(calls.filter((c) => c.startsWith("join:"))).toEqual([`join:${VOICE_A}:true:false`]);
+  });
+
+  test("a rejoin with saved flags (after a reload) keeps them, open mic included", async () => {
+    const { voice, store, calls } = setup({ joinMuted: true });
+    await voice.toggleVoice(VOICE_A, { flags: { selfMute: false, selfDeaf: false, muteBeforeDeaf: false } });
+    expect(calls).toEqual([`join:${VOICE_A}:false:false`]);
+    expect(store.getState().voice.selfMute).toBe(false);
+  });
+
+  test("a rejoin with saved flags restores mute/deaf too, so undeafen goes back to what it was", async () => {
+    const { voice, store, calls } = setup({ joinMuted: false });
+    await voice.toggleVoice(VOICE_A, { flags: { selfMute: true, selfDeaf: true, muteBeforeDeaf: false } });
+    expect(calls).toEqual([`join:${VOICE_A}:true:true`]);
+    voice.toggleDeaf();
+    expect(store.getState().voice).toMatchObject({ selfMute: false, selfDeaf: false });
+  });
+
+  test("off, joining keeps whatever the mic was (today's behavior)", async () => {
+    const { voice, calls } = setup({ joinMuted: false });
+    await voice.toggleVoice(VOICE_A);
+    expect(calls).toEqual([`join:${VOICE_A}:false:false`]);
+  });
 });
 
 test("a session error leaves voice with the message and stops the audio", async () => {

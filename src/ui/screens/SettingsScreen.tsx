@@ -48,6 +48,7 @@ type Section =
   | "sounds"
   | "soundVolume"
   | "soundEvent"
+  | "joinMuted"
   | "status"
   | "theme"
   | "images"
@@ -64,6 +65,7 @@ const SECTIONS: Section[] = [
   "sounds",
   "soundVolume",
   "soundEvent",
+  "joinMuted",
   "status",
   "theme",
   "images",
@@ -168,6 +170,7 @@ export function SettingsScreen(props: {
       const events = { ...settings().sounds.events, [cue()]: !settings().sounds.events[cue()] };
       return patch({ sounds: { ...settings().sounds, events } });
     }
+    if (section === "joinMuted" && dir === 0) return patch({ joinMuted: !settings().joinMuted });
     if (section === "streamMonitor") return cycleMonitor(dir === 0 ? 1 : dir);
     if (section === "streamQuality") {
       const index = STREAM_QUALITIES.indexOf(settings().streamQuality);
@@ -296,6 +299,8 @@ export function SettingsScreen(props: {
           "soundEvent",
           `${CUE_LABELS[cue()]}: ${settings().sounds.events[cue()] ? "suena" : "no suena"}  (h/l elige, Enter cambia)`,
         )}
+        <text fg={theme().header}>Llamadas</text>
+        {line("joinMuted", `entrar a voz silenciado: ${settings().joinMuted ? "sí" : "no"}`)}
         <text fg={theme().header}>Cuenta</text>
         {line("status", `estado: ${statusLabel(settings().status)}  (Enter o h/l)`)}
         <text fg={theme().header}>Apariencia</text>

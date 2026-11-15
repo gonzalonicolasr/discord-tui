@@ -25,8 +25,19 @@ export interface VoiceMedia {
   createReferenceDecoder?(): { decode(opus: Uint8Array): Uint8Array; destroy?(): void };
 }
 
+/** Mute/deaf propios, tal como están en el store. */
+export interface VoiceFlags {
+  selfMute: boolean;
+  selfDeaf: boolean;
+  muteBeforeDeaf: boolean;
+}
+
 export interface VoiceActions {
-  toggleVoice(channelId: string): Promise<void>;
+  /**
+   * Entrar (o salir si ya estás en ese canal). Por decisión del usuario: con `settings.joinMuted` el mic arranca
+   * cerrado. `flags` es volver a entrar con el estado de antes (recarga): se respetan tal cual.
+   */
+  toggleVoice(channelId: string, opts?: { flags?: VoiceFlags }): Promise<void>;
   leaveVoice(): Promise<void>;
   toggleMute(): void;
   toggleDeaf(): void;
@@ -389,7 +400,7 @@ export function createVoiceActions(deps: {
     }
   }
 
-  async function toggleVoiceNow(channelId: string): Promise<void> {
+  async function toggleVoiceNow(channelId: string, flags?: VoiceFlags): Promise<void> {
       const state = store.getState();
       const channel = state.channels[channelId];
       if (!channel || channel.type !== 2 || channel.guildId === null) {
@@ -406,6 +417,11 @@ export function createVoiceActions(deps: {
         await stopMedia();
         await session.leave();
       }
+      const v = voice();
+      if (flags) store.dispatch({ type: "voice/flags", ...flags });
+      else if (settings().joinMuted && !v.selfMute) {
+        store.dispatch({ type: "voice/flags", selfMute: true, selfDeaf: v.selfDeaf, muteBeforeDeaf: v.muteBeforeDeaf });
+      }
       store.dispatch({ type: "voice/joining", guildId: channel.guildId, channelId });
       if (settings().inputMode === "push_to_talk") getPtt();
       try {
@@ -417,11 +433,11 @@ export function createVoiceActions(deps: {
   }
 
   return {
-    toggleVoice: (channelId: string) => {
+    toggleVoice: (channelId: string, opts?: { flags?: VoiceFlags }) => {
       // Un `v` mientras todavía está conectando corta ese intento en vez de esperar el timeout.
       const status = voice().status;
       if (status === "joining" || status === "reconnecting") void session.leave();
-      return serial(() => toggleVoiceNow(channelId));
+      return serial(() => toggleVoiceNow(channelId, opts?.flags));
     },
 
     leaveVoice: () => serial(() => leaveVoice()),

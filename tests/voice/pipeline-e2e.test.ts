@@ -40,7 +40,8 @@ test("mic → VAD → opus → voice server, and the other person's opus → mix
     t: "READY",
     d: { user: { id: ME, username: "gon" }, guilds: [{ id: GUILD, name: "g", channels: [{ id: VOICE, type: 2, name: "Voz" }] }] },
   });
-  store.dispatch({ type: "settings/set", patch: { vadSensitivity: -40 } });
+  // Mic abierto al entrar (este test mide el pipeline, no la regla de "entrar silenciado").
+  store.dispatch({ type: "settings/set", patch: { vadSensitivity: -40, joinMuted: false } });
 
   const listeners = new Set<(t: string, d: any) => void>();
   const gateway = {

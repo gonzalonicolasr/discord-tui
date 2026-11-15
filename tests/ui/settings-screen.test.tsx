@@ -237,4 +237,19 @@ describe("SettingsScreen", () => {
     expect(store.getState().settings.animateImages).toBe(true);
     expect(captureCharFrame()).toContain("avatares: no");
   });
+  test("Llamadas: 'entrar a voz silenciado' is on by default and Enter turns it off, under the sound rows", async () => {
+    const { store, actions, deps } = setup();
+    const { mockInput, renderOnce, captureCharFrame } = await testRender(
+      () => <SettingsScreen store={store} actions={actions} deps={deps} inVoice={false} onClose={() => {}} />,
+      { width: 90, height: 44 },
+    );
+    await renderOnce();
+    expect(captureCharFrame()).toMatch(/Llamadas[\s│]*entrar a voz silenciado: sí/);
+    for (let i = 0; i < 10; i += 1) mockInput.pressKey("j");
+    await renderOnce();
+    mockInput.pressEnter();
+    await renderOnce();
+    expect(store.getState().settings.joinMuted).toBe(false);
+    expect(captureCharFrame()).toContain("entrar a voz silenciado: no");
+  });
 });

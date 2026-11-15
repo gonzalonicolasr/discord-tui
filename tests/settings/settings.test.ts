@@ -199,3 +199,12 @@ describe("sound settings", () => {
     expect(store.getState().settings.sounds).toEqual(sounds);
   });
 });
+
+describe("mic safety settings", () => {
+  test("join muted: on by default, keeps a boolean and drops anything else", () => {
+    expect(DEFAULT_SETTINGS.joinMuted).toBe(true);
+    expect(normalizeSettings({}).joinMuted).toBe(true);
+    expect(normalizeSettings({ joinMuted: false }).joinMuted).toBe(false);
+    expect(normalizeSettings({ joinMuted: "no", theme: "light" })).toMatchObject({ joinMuted: true, theme: "light" });
+  });
+});

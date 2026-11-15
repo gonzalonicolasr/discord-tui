@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, watch, writeFileSync } fro
 import { join } from "node:path";
 
 import { stateDir } from "../config/paths";
+import type { VoiceFlags } from "../actions/voice";
 import { log } from "../log/logger";
 import type { Store } from "../store/store";
 
@@ -13,6 +14,8 @@ export interface ReloadState {
   guildId: string | null;
   channelId: string | null;
   voiceChannelId: string | null;
+  /** Mute/deaf al recargar: la llamada se retoma igual (null = no estabas en una, o archivo viejo). */
+  voiceFlags: VoiceFlags | null;
   at: number;
 }
 
@@ -28,6 +31,10 @@ export function captureReloadState(store: Store, now = Date.now()): ReloadState 
     guildId: state.ui.selectedGuildId,
     channelId: state.ui.selectedChannelId,
     voiceChannelId: state.voice.channelId,
+    voiceFlags:
+      state.voice.channelId === null
+        ? null
+        : { selfMute: state.voice.selfMute, selfDeaf: state.voice.selfDeaf, muteBeforeDeaf: state.voice.muteBeforeDeaf },
     at: now,
   };
 }
@@ -49,7 +56,12 @@ export function takeReloadState(path = reloadStatePath(), now = Date.now()): Rel
     rmSync(path, { force: true });
     if (typeof raw.at !== "number" || now - raw.at > MAX_AGE_MS) return null;
     const id = (value: unknown): string | null => (typeof value === "string" && /^\d{17,20}$/.test(value) ? value : value === "@dms" ? "@dms" : null);
-    return { guildId: id(raw.guildId), channelId: id(raw.channelId), voiceChannelId: id(raw.voiceChannelId), at: raw.at };
+    const f = raw.voiceFlags as Partial<VoiceFlags> | null | undefined;
+    const voiceFlags =
+      typeof f?.selfMute === "boolean" && typeof f.selfDeaf === "boolean" && typeof f.muteBeforeDeaf === "boolean"
+        ? { selfMute: f.selfMute, selfDeaf: f.selfDeaf, muteBeforeDeaf: f.muteBeforeDeaf }
+        : null;
+    return { guildId: id(raw.guildId), channelId: id(raw.channelId), voiceChannelId: id(raw.voiceChannelId), voiceFlags, at: raw.at };
   } catch {
     rmSync(path, { force: true });
     return null;
@@ -65,7 +77,7 @@ export function restoreAfterReload(
   actions: {
     selectGuild(id: string): void;
     openChannel(id: string): Promise<void>;
-    voice?: { toggleVoice(id: string): Promise<void> };
+    voice?: { toggleVoice(id: string, opts?: { flags?: VoiceFlags }): Promise<void> };
   },
   saved: ReloadState,
 ): () => void {
@@ -79,7 +91,9 @@ export function restoreAfterReload(
     if (saved.guildId && (saved.guildId === "@dms" || state.guilds[saved.guildId])) actions.selectGuild(saved.guildId);
     if (saved.channelId && state.channels[saved.channelId]) void actions.openChannel(saved.channelId).catch(() => {});
     if (saved.voiceChannelId && state.channels[saved.voiceChannelId] && state.voice.channelId === null) {
-      void actions.voice?.toggleVoice(saved.voiceChannelId).catch(() => {});
+      // Con el mute/deaf de antes de recargar: no es "entrar" por decisión del usuario.
+      const opts = saved.voiceFlags ? { flags: saved.voiceFlags } : undefined;
+      void actions.voice?.toggleVoice(saved.voiceChannelId, opts).catch(() => {});
     }
     log.info("app.reload-restored", { state: saved.voiceChannelId ? "voice" : "ui" });
   };

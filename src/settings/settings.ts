@@ -44,6 +44,8 @@ export interface Settings {
   streamMonitor: string | null;
   streamQuality: StreamQuality;
   sounds: SoundSettings;
+  /** Al entrar a un canal de voz por decisión propia, el micrófono arranca cerrado (mover/reconectar/recargar no). */
+  joinMuted: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -62,6 +64,7 @@ export const DEFAULT_SETTINGS: Settings = {
   streamMonitor: null,
   streamQuality: "720p30",
   sounds: { enabled: true, volume: 60, events: allCues(true) },
+  joinMuted: true,
 };
 
 function allCues(on: boolean): Record<Cue, boolean> {
@@ -152,6 +155,7 @@ export function normalizeSettings(raw: unknown): Settings {
       ? (record.streamQuality as StreamQuality)
       : DEFAULT_SETTINGS.streamQuality,
     sounds: parseSounds(record.sounds),
+    joinMuted: typeof record.joinMuted === "boolean" ? record.joinMuted : DEFAULT_SETTINGS.joinMuted,
   };
 }
 
