@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test";
 
 import type { CaptureEnv, ProcLike, SpawnOpts } from "../../src/golive/capture";
-import { AUDIO_NODE, desktopAudioCommand, isZcordProcess, planLinks, probeDesktopAudio, startAudioLinker } from "../../src/golive/desktop-audio";
+import { AUDIO_NODE, desktopAudioCommand, isZcordProcess, planLinks, planUnlinks, probeDesktopAudio, startAudioLinker } from "../../src/golive/desktop-audio";
 
 // Un pw-dump de juguete con la forma del real (PipeWire 1.6): clientes con su pid, nodos, puertos y enlaces.
-const client = (id: number, pid: number, bin: string) => ({
+const client = (id: number, pid: number | null, bin: string) => ({
   id,
   type: "PipeWire:Interface:Client",
-  info: { props: { "application.process.id": pid, "application.process.binary": bin } },
+  info: { props: { ...(pid !== null ? { "application.process.id": pid } : {}), "application.process.binary": bin } },
 });
 const node = (id: number, clientId: number, cls: string | null, name: string) => ({
   id,
@@ -68,6 +68,17 @@ function dump(): unknown[] {
     node(800, 80, "Stream/Output/Audio", "game"),
     port(801, 800, "output", "FL"),
     port(802, 800, "output", "LFE"),
+    // sin identificar: un nodo cuyo cliente no está en el dump, y un cliente sin pid. Ante la duda, NO.
+    node(900, 99, "Stream/Output/Audio", "huerfano"),
+    port(901, 900, "output", "FL"),
+    client(95, null, "rara"),
+    node(950, 95, "Stream/Output/Audio", "sin-pid"),
+    port(951, 950, "output", "FL"),
+    // enlaces de una vuelta anterior que ahora se ve que no van: la voz de zcord y un mezclador
+    link(301, 101),
+    link(511, 102),
+    // el enlace de otra instancia a SU nodo: no es nuestro, no se toca
+    link(301, 111),
   ];
 }
 
@@ -111,10 +122,31 @@ describe("planLinks", () => {
     expect(pairs.some(([out]) => out === 301 || out === 302)).toBe(false);
   });
 
+  test("never links what cannot be identified (no client in the dump, or a client without a pid)", () => {
+    const pairs = planLinks(dump(), { recorderPid: RECORDER_PID, isOwn });
+    expect(pairs.some(([out]) => out === 901 || out === 951)).toBe(false);
+  });
+
   test("nothing to do until our recorder shows up, or with a dump that is not a list", () => {
     expect(planLinks(dump(), { recorderPid: 4242, isOwn })).toEqual([]);
     expect(planLinks({ nope: true }, { recorderPid: RECORDER_PID, isOwn })).toEqual([]);
     expect(planLinks([null, 3, "x"], { recorderPid: RECORDER_PID, isOwn })).toEqual([]);
+  });
+});
+
+describe("planUnlinks", () => {
+  test("undoes links into our recorder from zcord, mixers or unidentified nodes; leaves the good ones and other instances alone", () => {
+    const unidentified = [...dump(), link(901, 101), link(951, 102)];
+    expect(planUnlinks(unidentified, { recorderPid: RECORDER_PID, isOwn })).toEqual([
+      [301, 101],
+      [511, 102],
+      [901, 101],
+      [951, 102],
+    ]);
+  });
+
+  test("nothing to undo without our recorder", () => {
+    expect(planUnlinks(dump(), { recorderPid: 4242, isOwn })).toEqual([]);
   });
 });
 
@@ -129,6 +161,21 @@ describe("isZcordProcess", () => {
     } finally {
       child.kill();
       await child.exited;
+    }
+  });
+
+  test("also grandchildren (a pw-cat behind sh -c or nice is still zcord)", async () => {
+    const sh = Bun.spawn(["sh", "-c", "sleep 5 & echo $!; wait"], { stdout: "pipe", stderr: "ignore" });
+    try {
+      const reader = sh.stdout.getReader();
+      const { value } = await reader.read();
+      reader.releaseLock();
+      const grandchild = Number(new TextDecoder().decode(value).trim());
+      expect(grandchild).toBeGreaterThan(1);
+      expect(isZcordProcess(grandchild)).toBe(true);
+    } finally {
+      sh.kill();
+      await sh.exited;
     }
   });
 });
@@ -180,7 +227,10 @@ describe("audio linker", () => {
     await Bun.sleep(70);
     await linker.stop();
     const links = spawned.filter((s) => s.cmd[0] === "pw-link").map((s) => s.cmd);
-    expect(links.slice(0, 4)).toEqual([
+    // primero deshace lo que no va, después enlaza lo que falta
+    expect(links.slice(0, 6)).toEqual([
+      ["pw-link", "-d", "301", "101"],
+      ["pw-link", "-d", "511", "102"],
       ["pw-link", "202", "102"],
       ["pw-link", "401", "101"],
       ["pw-link", "401", "102"],

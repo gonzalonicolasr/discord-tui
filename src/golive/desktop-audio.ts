@@ -8,8 +8,10 @@
  * - No se mueve ningún stream ni se toca la config: las apps siguen sonando donde sonaban; el enlace es extra.
  * - Se deshace solo: los enlaces mueren con el nodo de pw-record, y pw-record muere con la transmisión (stop) o
  *   si zcord se cae (su stdout va a ffmpeg, que muere con zcord: EPIPE).
- * - Afuera: zcord y sus hijos directos (el pw-cat de la voz y el de los audios), y los nodos que mezclan todo
- *   lo que suena (EasyEffects, loopbacks del propio PipeWire), que traerían de vuelta la voz de la llamada.
+ * - Afuera: zcord y sus descendientes (el pw-cat de la voz y el de los audios), los nodos que mezclan todo lo
+ *   que suena (EasyEffects, loopbacks del propio PipeWire), que traerían de vuelta la voz de la llamada, y todo
+ *   lo que no se puede identificar (sin cliente o sin pid): ante la duda, no se enlaza.
+ * - En cada vuelta se revisan los enlaces hechos y se deshacen (`pw-link -d`) los que ya no deberían estar.
  */
 import { readFileSync } from "node:fs";
 
@@ -48,17 +50,28 @@ export function desktopAudioCommand(): string[] {
   ];
 }
 
-/** El pid es zcord o un hijo directo suyo (los pw-cat de src/voice/audio-io.ts y src/media/audio-player.ts). */
-export function isZcordProcess(pid: number): boolean {
-  if (pid === process.pid) return true;
+function parentOf(pid: number): number | null {
   try {
     const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
     // "pid (comm) state ppid …": comm puede tener espacios y paréntesis, se corta después del último ")".
     const ppid = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]);
-    return ppid === process.pid;
+    return Number.isInteger(ppid) ? ppid : null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+/**
+ * El pid es zcord o un descendiente suyo (los pw-cat de src/voice/audio-io.ts y src/media/audio-player.ts, o uno
+ * lanzado a través de `sh -c`/`nice`). Sube por los padres hasta 64 niveles.
+ */
+export function isZcordProcess(pid: number): boolean {
+  let current: number | null = pid;
+  for (let depth = 0; depth < 64 && current !== null && current > 1; depth += 1) {
+    if (current === process.pid) return true;
+    current = parentOf(current);
+  }
+  return false;
 }
 
 type Obj = { id: number; type: string; info: any };
@@ -68,8 +81,17 @@ function objects(dump: unknown): Obj[] {
   return dump.filter((o): o is Obj => typeof o?.id === "number" && typeof o?.type === "string" && typeof o?.info === "object" && o.info !== null);
 }
 
-/** Enlaces que faltan, como pares [puerto de salida de una app, puerto de entrada nuestro]. */
-export function planLinks(dump: unknown, opts: { recorderPid: number; isOwn: (pid: number) => boolean }): Array<[number, number]> {
+interface Graph {
+  recorder: Obj;
+  inputs: Map<string, number>;
+  existing: Array<[number, number]>;
+  nodeOfPort: Map<number, Obj>;
+  /** Un nodo que se puede enlazar: una app identificada que no es zcord ni un mezclador. */
+  isSource(node: Obj): boolean;
+  outputs(node: Obj): Obj[];
+}
+
+function graph(dump: unknown, opts: { recorderPid: number; isOwn: (pid: number) => boolean }): Graph | null {
   const all = objects(dump);
   const clients = new Map<number, { pid: number | null; bin: string }>();
   for (const o of all) {
@@ -84,28 +106,65 @@ export function planLinks(dump: unknown, opts: { recorderPid: number; isOwn: (pi
     ports.filter((p) => Number(p.info.props?.["node.id"]) === nodeId && p.info.direction === direction && p.info.props?.["port.monitor"] !== true);
 
   const recorder = nodes.find((n) => n.info.props?.["node.name"] === AUDIO_NODE && clientOf(n)?.pid === opts.recorderPid);
-  if (!recorder) return [];
+  if (!recorder) return null;
   const inputs = new Map<string, number>();
   for (const p of portsOf(recorder.id, "input")) inputs.set(String(p.info.props?.["audio.channel"]), p.id);
 
-  const existing = new Set<string>();
+  const existing: Array<[number, number]> = [];
   for (const o of all) {
-    if (o.type === "PipeWire:Interface:Link") existing.add(`${o.info["output-port-id"]}:${o.info["input-port-id"]}`);
+    if (o.type === "PipeWire:Interface:Link") existing.push([Number(o.info["output-port-id"]), Number(o.info["input-port-id"])]);
+  }
+  const nodeById = new Map(nodes.map((n) => [n.id, n]));
+  const nodeOfPort = new Map<number, Obj>();
+  for (const p of ports) {
+    const n = nodeById.get(Number(p.info.props?.["node.id"]));
+    if (n) nodeOfPort.set(p.id, n);
   }
 
+  return {
+    recorder,
+    inputs,
+    existing,
+    nodeOfPort,
+    isSource(n: Obj): boolean {
+      if (n.id === recorder.id || n.info.props?.["media.class"] !== "Stream/Output/Audio") return false;
+      const c = clientOf(n);
+      // Sin cliente o sin pid no se sabe de quién es: podría ser la voz de la llamada.
+      if (!c || c.pid === null) return false;
+      return !MIXERS.has(c.bin) && !opts.isOwn(c.pid);
+    },
+    outputs: (n: Obj) => portsOf(n.id, "output"),
+  };
+}
+
+/** Enlaces que faltan, como pares [puerto de salida de una app, puerto de entrada nuestro]. */
+export function planLinks(dump: unknown, opts: { recorderPid: number; isOwn: (pid: number) => boolean }): Array<[number, number]> {
+  const g = graph(dump, opts);
+  if (!g) return [];
+  const existing = new Set(g.existing.map(([out, input]) => `${out}:${input}`));
   const pairs: Array<[number, number]> = [];
-  for (const n of nodes) {
-    if (n.id === recorder.id || n.info.props?.["media.class"] !== "Stream/Output/Audio") continue;
-    const c = clientOf(n);
-    if (c && (MIXERS.has(c.bin) || (c.pid !== null && opts.isOwn(c.pid)))) continue;
-    for (const p of portsOf(n.id, "output")) {
+  for (const n of new Set(g.nodeOfPort.values())) {
+    if (!g.isSource(n)) continue;
+    for (const p of g.outputs(n)) {
       for (const channel of CHANNEL_MAP[String(p.info.props?.["audio.channel"])] ?? []) {
-        const input = inputs.get(channel);
+        const input = g.inputs.get(channel);
         if (input !== undefined && !existing.has(`${p.id}:${input}`)) pairs.push([p.id, input]);
       }
     }
   }
   return pairs;
+}
+
+/** Enlaces a nuestra entrada que no deberían estar (zcord, un mezclador, algo sin identificar): a deshacer. */
+export function planUnlinks(dump: unknown, opts: { recorderPid: number; isOwn: (pid: number) => boolean }): Array<[number, number]> {
+  const g = graph(dump, opts);
+  if (!g) return [];
+  const ours = new Set(g.inputs.values());
+  return g.existing.filter(([out, input]) => {
+    if (!ours.has(input)) return false;
+    const n = g.nodeOfPort.get(out);
+    return !n || !g.isSource(n);
+  });
 }
 
 async function runText(env: CaptureEnv, cmd: string[], timeoutMs: number): Promise<{ code: number; text: string }> {
@@ -161,7 +220,12 @@ export function startAudioLinker(opts: {
         warned = true;
         log.warn("golive.audio-dump-failed");
       }
-      for (const [out, input] of dump ? planLinks(dump, { recorderPid: opts.recorderPid, isOwn }) : []) {
+      const plan = { recorderPid: opts.recorderPid, isOwn };
+      for (const [out, input] of dump ? planUnlinks(dump, plan) : []) {
+        if (stopped) break;
+        await runText(opts.env, ["pw-link", "-d", String(out), String(input)], 2_000).catch(() => null);
+      }
+      for (const [out, input] of dump ? planLinks(dump, plan) : []) {
         if (stopped) break;
         // Sin `-L` igual queda (linger es el default de pw-link): muere con el nodo de pw-record.
         await runText(opts.env, ["pw-link", String(out), String(input)], 2_000).catch(() => null);
