@@ -294,3 +294,12 @@ test("stats report the gap between someone's voice packets (p95 and max) and res
   expect(ended).toEqual(["u"]);
   expect(rx.stats().arrivalMaxMs).toBe(0);
 });
+
+test("an empty Opus packet is ignored (the WASM decoder would turn it into 120 ms of concealment)", () => {
+  const h = harness();
+  h.opus("a", new Uint8Array(0));
+  expect(h.decoders()).toBe(0);
+  expect(h.pushed.a).toBeUndefined();
+  h.opus("a", Uint8Array.of(1));
+  expect(h.pushed.a).toHaveLength(1);
+});

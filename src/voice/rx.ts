@@ -146,6 +146,8 @@ export function createReceiver(deps: {
 
   const offOpus = deps.session.onOpus((userId, opus) => {
     packets += 1;
+    // Vacío no es audio: el decoder WASM lo tomaría como "paquete perdido" y devolvería 120 ms de relleno.
+    if (opus.byteLength === 0) return;
     const at = now();
     freeIdleDecoders(at);
     if (isSilence(opus)) {
