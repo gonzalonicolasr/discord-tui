@@ -212,24 +212,38 @@ export function startAudioLinker(opts: {
   let wake: (() => void) | null = null;
   let warned = false;
 
+  /** Una vuelta: leer el grafo, deshacer lo que no va y enlazar lo que falta. */
+  const pass = async (): Promise<void> => {
+    const dump = await readDump(opts.env, 2_000);
+    if (stopped) return;
+    if (dump === null && !warned) {
+      warned = true;
+      log.warn("golive.audio-dump-failed");
+    }
+    if (dump === null) return;
+    const plan = { recorderPid: opts.recorderPid, isOwn };
+    for (const [out, input] of planUnlinks(dump, plan)) {
+      if (stopped) return;
+      await runText(opts.env, ["pw-link", "-d", String(out), String(input)], 2_000).catch(() => null);
+    }
+    for (const [out, input] of planLinks(dump, plan)) {
+      if (stopped) return;
+      // Sin `-L` igual queda (linger es el default de pw-link): muere con el nodo de pw-record.
+      await runText(opts.env, ["pw-link", String(out), String(input)], 2_000).catch(() => null);
+    }
+  };
+
   const loop = (async () => {
+    let failed = false;
     while (!stopped) {
-      const dump = await readDump(opts.env, 2_000);
+      try {
+        await pass();
+      } catch (error) {
+        // Una vuelta rota no corta el enlazador ni hace fallar stop().
+        if (!failed) log.warn("golive.audio-link-failed", { error_name: error instanceof Error ? error.name : "error" });
+        failed = true;
+      }
       if (stopped) break;
-      if (dump === null && !warned) {
-        warned = true;
-        log.warn("golive.audio-dump-failed");
-      }
-      const plan = { recorderPid: opts.recorderPid, isOwn };
-      for (const [out, input] of dump ? planUnlinks(dump, plan) : []) {
-        if (stopped) break;
-        await runText(opts.env, ["pw-link", "-d", String(out), String(input)], 2_000).catch(() => null);
-      }
-      for (const [out, input] of dump ? planLinks(dump, plan) : []) {
-        if (stopped) break;
-        // Sin `-L` igual queda (linger es el default de pw-link): muere con el nodo de pw-record.
-        await runText(opts.env, ["pw-link", String(out), String(input)], 2_000).catch(() => null);
-      }
       await new Promise<void>((resolve) => {
         const timer = setTimeout(resolve, interval);
         wake = () => (clearTimeout(timer), resolve());
@@ -242,7 +256,7 @@ export function startAudioLinker(opts: {
     async stop(): Promise<void> {
       stopped = true;
       wake?.();
-      await loop;
+      await loop.catch(() => {});
     },
   };
 }

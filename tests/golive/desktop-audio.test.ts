@@ -242,6 +242,21 @@ describe("audio linker", () => {
     expect(spawned.length).toBe(count);
   });
 
+  test("a pass that throws does not kill the linker, and stop() never rejects", async () => {
+    const { env, spawned } = fakeEnv();
+    const linker = startAudioLinker({
+      env,
+      recorderPid: RECORDER_PID,
+      isOwn: () => {
+        throw new Error("boom");
+      },
+      intervalMs: 10,
+    });
+    await Bun.sleep(50);
+    await expect(linker.stop()).resolves.toBeUndefined();
+    expect(spawned.filter((s) => s.cmd[0] === "pw-dump").length).toBeGreaterThan(1);
+  });
+
   test("a broken pw-dump does not stop the polling nor throw", async () => {
     const { env, spawned } = fakeEnv({ dump: "basura", dumpExit: 1 });
     const linker = startAudioLinker({ env, recorderPid: RECORDER_PID, isOwn, intervalMs: 10 });
