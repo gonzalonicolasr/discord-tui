@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { createOpusCodec } from "../../src/voice/opus";
+import { createWasmOpus } from "../../src/voice/opus-wasm";
 import { FRAME_BYTES, bestCorrelation, sampleAt, silence, sine440 } from "../helpers/pcm";
 
 function rms(pcm: Uint8Array): number {
@@ -100,4 +101,17 @@ test("a 120 ms Opus packet decodes whole and does not overwrite the other codecs
   }
   expect(encoder.encode(sine440()).length).toBeGreaterThan(0);
   for (const codec of [...neighbours, decoder, encoder]) codec.destroy();
+});
+
+test("the encoder rejects a frame size Opus cannot encode here or that does not match the PCM", () => {
+  const codec = createWasmOpus(2);
+  const pcmFor = (samples: number) => new Uint8Array(samples * 2 * 2);
+  // 120 ms trapeaba dentro del WASM y 100 ms se colgaba: se rechazan antes de llegar al C++.
+  expect(() => codec.encode(pcmFor(5760), 5760)).toThrow(RangeError);
+  expect(() => codec.encode(pcmFor(4800), 4800)).toThrow(RangeError);
+  // 20 ms de PCM con un frameSize de 40 ms leería memoria que no es del frame.
+  expect(() => codec.encode(pcmFor(960), 1920)).toThrow(RangeError);
+  expect(codec.encode(pcmFor(960), 960).length).toBeGreaterThan(0);
+  expect(codec.encode(pcmFor(2880), 2880).length).toBeGreaterThan(0);
+  codec.delete();
 });

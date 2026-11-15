@@ -33,6 +33,11 @@ const APPLICATION_AUDIO = 2049;
 // escribía hasta 23 KB más allá del buffer y pisaba los otros códecs del heap compartido.
 const MAX_FRAME_SAMPLES = 5760; // 120 ms a 48 kHz
 const MAX_PACKET_BYTES = 1276 * 3;
+/**
+ * Lo que el encoder acepta: de 2,5 a 60 ms. Más largo no sirve acá (con 100 ms el C++ se cuelga y con 120 ms trapea),
+ * aunque el decoder sí entregue hasta 120 ms.
+ */
+const ENCODER_FRAME_SAMPLES = new Set([120, 240, 480, 960, 1920, 2880]);
 
 let native: NativeModule | null = null;
 
@@ -62,7 +67,8 @@ export function createWasmOpus(channels = 2): WasmOpus {
   return {
     encode(pcm: Uint8Array, frameSize: number): Uint8Array {
       if (!alive) throw new Error("códec liberado");
-      if (pcm.byteLength > pcmBytes) throw new RangeError("frame PCM demasiado grande");
+      if (!ENCODER_FRAME_SAMPLES.has(frameSize)) throw new RangeError(`frameSize ${frameSize} no válido para el encoder`);
+      if (pcm.byteLength !== frameSize * channels * 2) throw new RangeError("el PCM no coincide con el frameSize");
       m.HEAPU16.set(pcm, inPcm >> 1);
       const length = handler._encode(inPcm, pcm.byteLength, outPacket, frameSize);
       if (length < 0) throw new Error(`Encode error: ${length}`);
