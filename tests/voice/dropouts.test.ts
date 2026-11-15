@@ -72,14 +72,22 @@ function simulate(opts: {
       next += 1;
     }
   }
-  /** Frames que se oyen sin la voz en medio de una frase (lo que Gon oye como "se corta"), desde `fromPhrase`. */
-  const cuts = (fromPhrase = 0) => {
+  /**
+   * Frames que se oyen sin la voz en medio de una frase (lo que Gon oye como "se corta"), desde `fromPhrase`.
+   * `silence`: zcord escribió silencio (jitter buffer vacío o silencio metido por el mixer); `starved`: pw-cat se
+   * quedó sin datos (zcord trabado más que su colchón); `all`: los dos.
+   */
+  const cuts = (fromPhrase = 0, kind: "all" | "silence" | "starved" = "all") => {
     let total = 0;
     for (let phrase = fromPhrase; phrase < opts.seconds / 2; phrase += 1) {
       const first = played.indexOf(100 + phrase);
       const last = played.lastIndexOf(100 + phrase);
       if (first === -1) continue;
-      for (let i = first; i <= last; i += 1) if (played[i] !== 100 + phrase) total += 1;
+      for (let i = first; i <= last; i += 1) {
+        if (played[i] === 100 + phrase) continue;
+        const starved = played[i] === -1;
+        if (kind === "all" || (kind === "starved") === starved) total += 1;
+      }
     }
     return total;
   };
@@ -106,5 +114,24 @@ describe("dropouts while listening (fake clock)", () => {
     });
     // Las primeras frases enseñan cuánto jitter hay; de la quinta en adelante no se corta más.
     expect(sim.cuts(5)).toBe(0);
+  });
+
+  test("event-loop stalls of 60-90 ms: zcord writes no silence in a phrase once the buffer learned them", () => {
+    const stalls: [number, number][] = [];
+    for (let at = 250; at < 40_000; at += 700) stalls.push([at, 60 + ((at / 700) % 4) * 10]);
+    const sim = simulate({ seconds: 40, stalls });
+    expect(sim.cuts(5, "silence")).toBe(0);
+    // Con el desfase del timer, 90 ms trabado puede pasar los 100 ms de colchón de pw-cat por un frame.
+    expect(sim.cuts(5, "starved")).toBeLessThanOrEqual(stalls.length);
+  });
+
+  test("an event-loop stall longer than pw-cat's cushion only costs the time pw-cat had nothing, no extra silence", () => {
+    // 150 ms trabado con 100 ms de colchón en pw-cat: se pierden ~50 ms (lo que pw-cat no tuvo), no 150.
+    const stalls: [number, number][] = [];
+    for (let at = 10_250; at < 40_000; at += 2_000) stalls.push([at, 150]);
+    const sim = simulate({ seconds: 40, stalls });
+    // La primera pausa cae en la frase 5 (la que enseña): se mira desde la 6.
+    expect(sim.cuts(6, "silence")).toBe(0);
+    expect(sim.cuts(6, "starved")).toBeLessThanOrEqual(stalls.length * 4);
   });
 });

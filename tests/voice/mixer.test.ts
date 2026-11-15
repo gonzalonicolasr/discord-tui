@@ -178,11 +178,23 @@ describe("continuous mode (keeps pw-cat fed)", () => {
     expect(h.written.every((f) => f.length === 3840)).toBe(true);
   });
 
-  test("an event-loop stall over 100 ms re-adds the cushion", () => {
+  test("after an event-loop stall over 100 ms the mixed slots refill the cushion, with no extra silence after them", () => {
     const h = harness(4);
     h.mixer.start();
+    h.mixer.buffer("u").push(pcmOf(100));
+    h.mixer.buffer("u").push(pcmOf(100));
+    for (let i = 0; i < 10; i += 1) h.mixer.buffer("u").push(pcmOf(100));
     h.advance(300);
-    expect(h.written).toHaveLength(4 + 5 + 4);
+    // 5 slots de audio real (el colchón de pw-cat se repone con la voz, no con silencio metido en la frase).
+    expect(h.written).toHaveLength(4 + 5);
+    expect(h.written.slice(4).every((f) => sampleAt(f, 0) === 100)).toBe(true);
+  });
+
+  test("a cushion longer than the catch-up is refilled whole after a long stall", () => {
+    const h = harness(8);
+    h.mixer.start();
+    h.advance(300);
+    expect(h.written).toHaveLength(8 + 8);
   });
 
   test("undeafen re-adds the cushion; deafened writes nothing", () => {

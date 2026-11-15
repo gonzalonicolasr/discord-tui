@@ -150,12 +150,13 @@ export function createMixer(deps: {
     if (due <= 0) return;
     tally.loopLagMaxMs = Math.max(tally.loopLagMaxMs, Math.round(t - clock - FRAME_MS));
     if (due >= 2) tally.lateTicks += 1;
-    if (due > MAX_CATCH_UP_FRAMES) {
-      tally.skippedFrames += due - MAX_CATCH_UP_FRAMES;
-      for (let i = 0; i < MAX_CATCH_UP_FRAMES; i += 1) mixSlot();
+    // Después de una pausa larga pw-cat se quedó sin colchón: se repone con los slots mezclados (la voz que estaba
+    // esperando), sin silencio extra. Meter silencio acá cortaba la frase 100 ms y dejaba 100 ms más de latencia.
+    const catchUp = continuous ? Math.max(MAX_CATCH_UP_FRAMES, preroll) : MAX_CATCH_UP_FRAMES;
+    if (due > catchUp) {
+      tally.skippedFrames += due - catchUp;
+      for (let i = 0; i < catchUp; i += 1) mixSlot();
       clock = t;
-      // Después de una pausa larga del event loop el colchón de pw-cat se gastó: se repone.
-      cushion();
       return;
     }
     for (let i = 0; i < due; i += 1) mixSlot();
