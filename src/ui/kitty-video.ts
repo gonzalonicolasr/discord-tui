@@ -14,6 +14,8 @@
  *
  * Si la terminal contesta que entiende píxeles comprimidos (`probeZlib`), los cuadros van con zlib (`o=z`): una
  * pantalla compartida con texto pesa varias veces menos y llegan más cuadros por segundo. Sin respuesta, sin zlib.
+ * Si un cuadro casi no se comprime (video con mucho grano), se deja de comprimir un rato: gastaría hilo principal
+ * (el mismo del audio de la llamada) para ahorrar poco.
  */
 import { deflateSync } from "node:zlib";
 
@@ -119,6 +121,10 @@ export function visibleParts(cols: number, rows: number, covered: (x: number, y:
 /** Como el nativo de OpenTUI: debajo del texto y encima de los fondos de las celdas. */
 const Z = -1073741823;
 const CHUNK = 4096;
+/** Con zlib, si el cuadro comprimido pesa más que esta fracción del crudo, no conviene. */
+const ZLIB_WORTH = 0.5;
+/** Cuántos cuadros sin comprimir antes de volver a probar (la pantalla puede pasar de video a texto). */
+const ZLIB_RETRY = 90;
 
 export class KittyVideo {
   private readonly ids: [number, number];
@@ -130,6 +136,7 @@ export class KittyVideo {
   private busy = false;
   private closed = false;
   private rgb = new Uint8Array(0);
+  private zlibPause = 0;
   /** Cuadros que llegaron a la salida (los salteados no cuentan), para los fps del encabezado. */
   written = 0;
   /** La terminal entiende `o=z` (ver `probeZlib`). */
@@ -140,7 +147,11 @@ export class KittyVideo {
     this.ids = [base, base + 1];
   }
 
-  /** Muestra un cuadro RGBA en `view`. Copia los píxeles al escribir. Con todo tapado no transmite nada. */
+  /**
+   * Muestra un cuadro RGBA en `view`. Guarda la referencia al buffer (el decodificador lo reusa) y copia los píxeles
+   * recién al escribir: si mientras tanto llega otro cuadro en el mismo buffer, sale el más nuevo, que es lo que se
+   * quiere. Con todo tapado no transmite nada.
+   */
   show(rgba: Uint8Array, width: number, height: number, view: VideoView): void {
     if (this.closed || view.box.cols <= 0 || view.box.rows <= 0) return;
     this.move(view);
@@ -204,8 +215,15 @@ export class KittyVideo {
       rgb[j + 2] = rgba[i + 2]!;
     }
     const pixels = Buffer.from(rgb.buffer, rgb.byteOffset, rgb.length);
-    const zlib = this.zlib;
-    const data = (zlib ? deflateSync(pixels, { level: 1 }) : pixels).toString("base64");
+    let payload: Buffer = pixels;
+    let zlib = false;
+    if (this.zlib && this.zlibPause > 0) this.zlibPause--;
+    else if (this.zlib) {
+      const packed = deflateSync(pixels, { level: 1 });
+      if (packed.length <= pixels.length * ZLIB_WORTH) (payload = packed), (zlib = true);
+      else this.zlibPause = ZLIB_RETRY; // casi no comprime: este va crudo y los próximos también
+    }
+    const data = payload.toString("base64");
     const parts: string[] = [];
     for (let at = 0; at < data.length; at += CHUNK) {
       const more = at + CHUNK < data.length ? 1 : 0;

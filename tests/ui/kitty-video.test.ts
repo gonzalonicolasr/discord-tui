@@ -121,14 +121,35 @@ test("with zlib on, the frame goes compressed (o=z) and inflates back to the RGB
   const o = output();
   const v = new KittyVideo(o.out);
   v.zlib = true;
-  const rgba = new Uint8Array(8 * 4 * 4).map((_, i) => (i * 37) & 255);
-  v.show(rgba, 8, 4, VIEW);
+  const rgba = new Uint8Array(32 * 16 * 4).map((_, i) => (i >> 7) * 9); // filas lisas: comprime bien
+  v.show(rgba, 32, 16, VIEW);
   const w = o.writes[0]!;
-  expect(w).toMatch(/\x1b_Ga=t,f=24,o=z,s=8,v=4,/);
+  expect(w).toMatch(/\x1b_Ga=t,f=24,o=z,s=32,v=16,/);
   const b64 = [...w.matchAll(/\x1b_G[^;]*;([^\x1b]*)\x1b\\/g)].map((m) => m[1]).join("");
   const rgb = inflateSync(Buffer.from(b64, "base64"));
   expect([...rgb.subarray(0, 6)]).toEqual([0, 1, 2, 4, 5, 6].map((i) => rgba[i]!));
-  expect(rgb.length).toBe(8 * 4 * 3);
+  expect(rgb.length).toBe(32 * 16 * 3);
+});
+
+test("frames that barely compress go raw, and zlib is tried again only after a while", async () => {
+  const o = output();
+  const v = new KittyVideo(o.out);
+  v.zlib = true;
+  const smooth = new Uint8Array(64 * 32 * 4).fill(90);
+  const grain = new Uint8Array(64 * 32 * 4).map(() => Math.floor(Math.random() * 256));
+  const send = async (rgba: Uint8Array): Promise<string> => {
+    v.show(rgba, 64, 32, VIEW);
+    const w = o.writes.at(-1)!;
+    o.flushIdle();
+    await Bun.sleep(0);
+    return w;
+  };
+  expect(await send(smooth)).toContain(",o=z,");
+  expect(await send(grain)).not.toContain(",o=z,"); // casi no baja: va crudo
+  expect(await send(smooth)).not.toContain(",o=z,"); // y no se vuelve a comprimir enseguida
+  let again = -1;
+  for (let i = 0; i < 120 && again < 0; i++) if ((await send(smooth)).includes(",o=z,")) again = i;
+  expect(again).toBeGreaterThan(30);
 });
 
 test("visible parts: a box over the middle leaves four rectangles, all covered leaves none", () => {
