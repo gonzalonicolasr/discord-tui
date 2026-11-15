@@ -31,6 +31,19 @@ export const CUE_LABELS: Record<Cue, string> = {
   disconnect: "se cortó la voz",
 };
 
+/**
+ * Siguiente opción de "silenciarme si no uso la PC" (null = no, la primera). Un valor que no está en la lista (editado
+ * a mano, p. ej. 7) va a la opción de al lado: 10 para arriba, 5 para abajo.
+ */
+function stepAutoMute(current: number | null, dir: -1 | 1): number | null {
+  const n = AUTO_MUTE_CHOICES.length;
+  const index = AUTO_MUTE_CHOICES.indexOf(current);
+  if (index >= 0 || current === null) return AUTO_MUTE_CHOICES[(Math.max(0, index) + dir + n) % n] ?? null;
+  const minutes = AUTO_MUTE_CHOICES.filter((c): c is number => c !== null);
+  if (dir === 1) return minutes.find((c) => c > current) ?? null;
+  return minutes.filter((c) => c < current).at(-1) ?? null;
+}
+
 export interface SettingsDeps {
   listAudioDevices(): Promise<{ inputs: AudioDevice[]; outputs: AudioDevice[] }>;
   startCapture: (opts?: { target?: string }) => Promise<any>;
@@ -172,12 +185,8 @@ export function SettingsScreen(props: {
       const events = { ...settings().sounds.events, [cue()]: !settings().sounds.events[cue()] };
       return patch({ sounds: { ...settings().sounds, events } });
     }
-    if (section === "joinMuted" && dir === 0) return patch({ joinMuted: !settings().joinMuted });
-    if (section === "autoMute") {
-      const index = Math.max(0, AUTO_MUTE_CHOICES.indexOf(settings().autoMuteAfterMinutes));
-      const step = dir === 0 ? 1 : dir;
-      return patch({ autoMuteAfterMinutes: AUTO_MUTE_CHOICES[(index + step + AUTO_MUTE_CHOICES.length) % AUTO_MUTE_CHOICES.length] ?? null });
-    }
+    if (section === "joinMuted") return patch({ joinMuted: !settings().joinMuted });
+    if (section === "autoMute") return patch({ autoMuteAfterMinutes: stepAutoMute(settings().autoMuteAfterMinutes, dir === -1 ? -1 : 1) });
     if (section === "streamMonitor") return cycleMonitor(dir === 0 ? 1 : dir);
     if (section === "streamQuality") {
       const index = STREAM_QUALITIES.indexOf(settings().streamQuality);
@@ -230,13 +239,15 @@ export function SettingsScreen(props: {
     section === "soundEvent" ||
     section === "streamMonitor" ||
     section === "autoMute";
+  /** Ajustes de seguridad: un click suelto solo selecciona la fila; cambian con Enter o h/l. */
+  const clickSelectsOnly = (section: Section): boolean => section === "joinMuted";
   const line = (section: Section, text: string): JSX.Element => (
     <box
       flexDirection="row"
       backgroundColor={row() === section ? theme().selection : undefined}
       onMouseDown={() => {
         setRow(section);
-        if (!arrows(section)) activate(section, 0);
+        if (!arrows(section) && !clickSelectsOnly(section)) activate(section, 0);
       }}
     >
       <text flexGrow={1} fg={row() === section ? theme().selectionFg : theme().fg}>{`${row() === section ? "> " : "  "}${text}`}</text>

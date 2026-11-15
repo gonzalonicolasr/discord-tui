@@ -281,4 +281,58 @@ describe("SettingsScreen", () => {
     await renderOnce();
     expect(store.getState().settings.autoMuteAfterMinutes).toBe(60);
   });
+  test("a click on 'entrar a voz silenciado' only selects the row; Enter or h/l change it", async () => {
+    const { store, actions, deps } = setup();
+    const { mockInput, mockMouse, renderOnce, captureCharFrame } = await testRender(
+      () => <SettingsScreen store={store} actions={actions} deps={deps} inVoice={false} onClose={() => {}} />,
+      { width: 90, height: 44 },
+    );
+    await renderOnce();
+    const lines = captureCharFrame().split("\n");
+    const y = lines.findIndex((l) => l.includes("entrar a voz silenciado"));
+    await mockMouse.click(lines[y]!.indexOf("entrar a voz silenciado") + 3, y);
+    await renderOnce();
+    expect(store.getState().settings.joinMuted).toBe(true);
+    expect(captureCharFrame()).toContain("> entrar a voz silenciado: sí");
+    mockInput.pressKey("l");
+    await renderOnce();
+    expect(store.getState().settings.joinMuted).toBe(false);
+    mockInput.pressKey("h");
+    await renderOnce();
+    expect(store.getState().settings.joinMuted).toBe(true);
+    mockInput.pressEnter();
+    await renderOnce();
+    expect(store.getState().settings.joinMuted).toBe(false);
+  });
+
+  test("minutes outside the list (hand-edited, e.g. 7) step to the next choice up or down, not to the ends", async () => {
+    const { store, actions, deps } = setup();
+    const { mockInput, renderOnce, captureCharFrame } = await testRender(
+      () => <SettingsScreen store={store} actions={actions} deps={deps} inVoice={false} onClose={() => {}} />,
+      { width: 90, height: 44 },
+    );
+    store.dispatch({ type: "settings/set", patch: { autoMuteAfterMinutes: 7 } });
+    await renderOnce();
+    expect(captureCharFrame()).toContain("silenciarme si no uso la PC: a los 7 min o al bloquear");
+    for (let i = 0; i < 11; i += 1) mockInput.pressKey("j");
+    mockInput.pressKey("l");
+    await renderOnce();
+    expect(store.getState().settings.autoMuteAfterMinutes).toBe(10);
+    store.dispatch({ type: "settings/set", patch: { autoMuteAfterMinutes: 7 } });
+    mockInput.pressKey("h");
+    await renderOnce();
+    expect(store.getState().settings.autoMuteAfterMinutes).toBe(5);
+    store.dispatch({ type: "settings/set", patch: { autoMuteAfterMinutes: 90 } });
+    mockInput.pressKey("h");
+    await renderOnce();
+    expect(store.getState().settings.autoMuteAfterMinutes).toBe(60);
+    store.dispatch({ type: "settings/set", patch: { autoMuteAfterMinutes: 90 } });
+    mockInput.pressKey("l");
+    await renderOnce();
+    expect(store.getState().settings.autoMuteAfterMinutes).toBeNull();
+    store.dispatch({ type: "settings/set", patch: { autoMuteAfterMinutes: 2 } });
+    mockInput.pressKey("h");
+    await renderOnce();
+    expect(store.getState().settings.autoMuteAfterMinutes).toBeNull();
+  });
 });
