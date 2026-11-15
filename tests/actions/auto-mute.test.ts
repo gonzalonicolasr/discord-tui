@@ -1,7 +1,7 @@
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 
 import { createAutoMute } from "../../src/actions/auto-mute";
-import type { SystemIdleEvents, SystemIdleSource } from "../../src/desktop/wayland-idle";
+import type { SystemIdleEvents, SystemIdleSource, SystemIdleTrouble } from "../../src/desktop/wayland-idle";
 import { createStore, emptyState } from "../../src/store/store";
 
 const GUILD = "100000000000000001";
@@ -15,6 +15,15 @@ const MIN = 60_000;
 function fakeSource() {
   let now = 0;
   let lastInput = 0;
+  let timers: Array<{ at: number; fn: () => void }> = [];
+  const setTimer = ((fn: () => void, ms: number) => {
+    const timer = { at: now + ms, fn };
+    timers.push(timer);
+    return timer;
+  }) as unknown as typeof setTimeout;
+  const clearTimer = ((timer: unknown) => {
+    timers = timers.filter((t) => t !== timer);
+  }) as unknown as typeof clearTimeout;
   let current: { ms: number; events: SystemIdleEvents; fired: boolean } | null = null;
   const starts: number[] = [];
   let stops = 0;
@@ -30,11 +39,18 @@ function fakeSource() {
   };
   return {
     source,
+    setTimer,
+    clearTimer,
+    pendingTimers: () => timers.length,
     starts,
     stops: () => stops,
     running: () => current !== null,
     advance(ms: number) {
       now += ms;
+      for (const timer of timers.filter((t) => t.at <= now)) {
+        timers = timers.filter((t) => t !== timer);
+        timer.fn();
+      }
       if (current && !current.fired && now - lastInput >= current.ms) {
         current.fired = true;
         current.events.idle();
@@ -46,6 +62,7 @@ function fakeSource() {
       if (current) current.fired = false;
     },
     lock: (locked: boolean) => current?.events.lock(locked),
+    trouble: (kind: SystemIdleTrouble) => current?.events.trouble(kind),
   };
 }
 
@@ -62,7 +79,14 @@ function setup(patch: Record<string, unknown> = {}) {
       store.dispatch({ type: "voice/flags", selfMute: !v.selfMute, selfDeaf: false, muteBeforeDeaf: v.muteBeforeDeaf });
     },
   };
-  const auto = createAutoMute({ store, voice, source: fake.source, notify: (title, body) => void notified.push([title, body]) });
+  const auto = createAutoMute({
+    store,
+    voice,
+    source: fake.source,
+    notify: (title, body) => void notified.push([title, body]),
+    setTimer: fake.setTimer,
+    clearTimer: fake.clearTimer,
+  });
   const join = (opts: { muted?: boolean } = {}) => {
     store.dispatch({ type: "voice/flags", selfMute: opts.muted ?? false, selfDeaf: false, muteBeforeDeaf: false });
     store.dispatch({ type: "voice/joining", guildId: GUILD, channelId: VOICE });
@@ -230,4 +254,75 @@ test("stop() stops the watch and ignores the store from then on", () => {
   store.dispatch({ type: "voice/left" });
   join();
   expect(fake.starts).toHaveLength(1);
+});
+
+describe("when the source does not work", () => {
+  const offNotices = (store: ReturnType<typeof setup>["store"]) =>
+    Object.values(store.getState().notices).filter((n) => n.key.startsWith("voice-auto-mute-off"));
+
+  test("unavailable or lost: one warn notice in the UI saying auto-mute is not working, not repeated", () => {
+    const { fake, join, store } = setup();
+    join();
+    fake.trouble("lost");
+    expect(offNotices(store)).toHaveLength(1);
+    expect(offNotices(store)[0]).toMatchObject({ level: "warn", count: 1 });
+    expect(offNotices(store)[0]!.text).toContain("auto-silencio");
+    store.dispatch({ type: "voice/left" });
+    join();
+    fake.trouble("lost");
+    expect(offNotices(store)[0]!.count).toBe(1);
+  });
+
+  test("a lost or unavailable source is retried once a minute later, in the same call; not again if it fails again", () => {
+    const { fake, join } = setup();
+    join();
+    fake.trouble("lost");
+    fake.advance(MIN - 1);
+    expect(fake.starts).toHaveLength(1);
+    fake.advance(1);
+    expect(fake.starts).toEqual([10 * MIN, 10 * MIN]);
+    expect(fake.stops()).toBe(1);
+    fake.trouble("unavailable");
+    fake.advance(10 * MIN);
+    expect(fake.starts).toHaveLength(2);
+  });
+
+  test("the retry still mutes, and the next call starts watching again (with its own retry)", () => {
+    const { fake, join, store, toggles } = setup();
+    join();
+    fake.trouble("unavailable");
+    fake.advance(MIN);
+    fake.advance(10 * MIN);
+    expect(toggles()).toBe(1);
+    store.dispatch({ type: "voice/left" });
+    join();
+    expect(fake.starts).toHaveLength(3);
+    fake.trouble("lost");
+    fake.advance(MIN);
+    expect(fake.starts).toHaveLength(4);
+  });
+
+  test("leaving the call or stop() cancels a pending retry", () => {
+    const { fake, join, store, auto } = setup();
+    join();
+    fake.trouble("lost");
+    store.dispatch({ type: "voice/left" });
+    expect(fake.pendingTimers()).toBe(0);
+    join();
+    fake.trouble("lost");
+    auto.stop();
+    expect(fake.pendingTimers()).toBe(0);
+    fake.advance(MIN);
+    expect(fake.starts).toHaveLength(2);
+  });
+
+  test("a missing part (no lock or no idle) is said once, without retrying", () => {
+    const { fake, join, store } = setup();
+    join();
+    fake.trouble("no-lock");
+    fake.advance(MIN);
+    expect(fake.starts).toHaveLength(1);
+    expect(offNotices(store)).toHaveLength(1);
+    expect(offNotices(store)[0]!.text).toContain("bloqueo");
+  });
 });

@@ -27,13 +27,18 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void
 
 function recorder() {
   const events: string[] = [];
+  const troubles: string[] = [];
   const logs: string[] = [];
-  const on: SystemIdleEvents = { idle: () => void events.push("idle"), lock: (locked) => void events.push(locked ? "locked" : "unlocked") };
+  const on: SystemIdleEvents = {
+    idle: () => void events.push("idle"),
+    lock: (locked) => void events.push(locked ? "locked" : "unlocked"),
+    trouble: (kind) => void troubles.push(kind),
+  };
   const logger = {
     info: (event: string, fields?: LogFields) => void logs.push(`info ${event} ${JSON.stringify(fields ?? {})}`),
     warn: (event: string, fields?: LogFields) => void logs.push(`warn ${event} ${JSON.stringify(fields ?? {})}`),
   };
-  return { events, logs, on, logger };
+  return { events, troubles, logs, on, logger };
 }
 
 test("on Hyprland it asks for input-only idle (v2, ignores idle inhibitors) with the timeout, and for lock notifications", async () => {
@@ -139,4 +144,80 @@ test("if the compositor goes away the log says so (and nothing else happens)", a
   fake.drop();
   await waitFor(() => r.logs.some((l) => l.includes("lost")));
   expect(r.events).toEqual([]);
+});
+
+test("the app reacting badly to an event (callback throws) does not close the connection nor blame the protocol", async () => {
+  fake = startFakeWayland({ globals: HYPRLAND });
+  const r = recorder();
+  let calls = 0;
+  const on: SystemIdleEvents = {
+    idle: () => {
+      calls += 1;
+      throw new Error("boom");
+    },
+    lock: (locked) => void r.events.push(locked ? "locked" : "unlocked"),
+    trouble: (kind) => void r.troubles.push(kind),
+  };
+  const stop = watchWaylandIdle(600_000, on, { env: { WAYLAND_DISPLAY: fake.path }, log: r.logger });
+  await waitFor(() => fake!.requests.includes("get_lock_notification"));
+  fake.idled();
+  await waitFor(() => calls === 1);
+  fake.locked();
+  await waitFor(() => r.events.length === 1);
+  expect(r.events).toEqual(["locked"]);
+  expect(fake.clients()).toBe(1);
+  expect(r.logs.some((l) => l.includes("callback-failed"))).toBe(true);
+  expect(r.logs.some((l) => l.includes("inválido") || l.includes("lost"))).toBe(false);
+  expect(r.troubles).toEqual([]);
+  stop();
+});
+
+test("each way of not working is also reported to the app as trouble (once), and stop() is not trouble", async () => {
+  const none = recorder();
+  watchWaylandIdle(1_000, none.on, { env: {}, log: none.logger });
+  expect(none.troubles).toEqual(["unavailable"]);
+
+  const dead = recorder();
+  watchWaylandIdle(1_000, dead.on, { env: { WAYLAND_DISPLAY: "/nonexistent/zcord/wayland-9" }, log: dead.logger });
+  await waitFor(() => dead.troubles.length > 0);
+  expect(dead.troubles).toEqual(["unavailable"]);
+
+  fake = startFakeWayland({ globals: [{ iface: "wl_seat", version: 9 }] });
+  const empty = recorder();
+  watchWaylandIdle(1_000, empty.on, { env: { WAYLAND_DISPLAY: fake.path }, log: empty.logger });
+  await waitFor(() => empty.troubles.length > 0);
+  expect(empty.troubles).toEqual(["unavailable"]);
+  fake.stop();
+
+  fake = startFakeWayland({ globals: [{ iface: "wl_seat", version: 9 }, { iface: "ext_idle_notifier_v1", version: 2 }] });
+  const noLock = recorder();
+  watchWaylandIdle(1_000, noLock.on, { env: { WAYLAND_DISPLAY: fake.path }, log: noLock.logger });
+  await waitFor(() => noLock.troubles.length > 0);
+  expect(noLock.troubles).toEqual(["no-lock"]);
+  fake.stop();
+
+  fake = startFakeWayland({ globals: [{ iface: "hyprland_lock_notifier_v1", version: 1 }] });
+  const noIdle = recorder();
+  watchWaylandIdle(1_000, noIdle.on, { env: { WAYLAND_DISPLAY: fake.path }, log: noIdle.logger });
+  await waitFor(() => noIdle.troubles.length > 0);
+  expect(noIdle.troubles).toEqual(["no-idle"]);
+  fake.stop();
+
+  fake = startFakeWayland({ globals: HYPRLAND });
+  const lost = recorder();
+  watchWaylandIdle(1_000, lost.on, { env: { WAYLAND_DISPLAY: fake.path }, log: lost.logger });
+  await waitFor(() => fake!.requests.includes("get_lock_notification"));
+  fake.drop();
+  await waitFor(() => lost.troubles.length > 0);
+  await Bun.sleep(10);
+  expect(lost.troubles).toEqual(["lost"]);
+
+  const fine = recorder();
+  const stop = watchWaylandIdle(1_000, fine.on, { env: { WAYLAND_DISPLAY: fake.path }, log: fine.logger });
+  await waitFor(() => fake!.clients() === 1);
+  await Bun.sleep(10);
+  stop();
+  await waitFor(() => fake!.clients() === 0);
+  await Bun.sleep(10);
+  expect(fine.troubles).toEqual([]);
 });

@@ -11,17 +11,26 @@
  *
  * `get_input_idle_notification` (v2) cuenta solo teclado/mouse, en cualquier ventana, e ignora los inhibidores de
  * idle (un video en el navegador no lo frena). Con v1 se usa `get_idle_notification`, que sí los respeta.
- * Si algo falta, se avisa en el log y esa parte queda apagada: nunca se cae a "actividad dentro de zcord".
+ * Si algo falta, se avisa en el log y a la app (`trouble`) y esa parte queda apagada: nunca se cae a "actividad
+ * dentro de zcord".
  */
 import { isAbsolute, join } from "node:path";
 
 import { log as defaultLog, type Logger } from "../log/logger";
+
+/**
+ * Por qué no anda (o anda a medias): sin conexión o sin ninguno de los dos avisos, se cortó la conexión, o el
+ * compositor no avisa una de las dos cosas.
+ */
+export type SystemIdleTrouble = "unavailable" | "lost" | "no-idle" | "no-lock";
 
 export interface SystemIdleEvents {
   /** Pasaron `idleAfterMs` sin teclado ni mouse en todo el sistema (una vez por período de inactividad). */
   idle(): void;
   /** Se bloqueó (true) o desbloqueó (false) la pantalla. Si ya estaba bloqueada al conectar, llega enseguida. */
   lock(locked: boolean): void;
+  /** No está funcionando, o funciona a medias (también queda en el log). Nunca llega después de stop(). */
+  trouble(kind: SystemIdleTrouble): void;
 }
 
 /** Empieza a mirar; devuelve cómo dejar de mirar. */
@@ -56,9 +65,22 @@ export function watchWaylandIdle(
 ): () => void {
   const env = opts.env ?? process.env;
   const log = opts.log ?? defaultLog;
+  /** Los callbacks son de la app: si tiran, se anota y se sigue (no es culpa del protocolo). */
+  const call = (fn: () => void): void => {
+    try {
+      fn();
+    } catch (error) {
+      log.warn(EVENT, { state: "callback-failed", error_name: error instanceof Error ? error.name : "unknown" });
+    }
+  };
+  const trouble = (kind: SystemIdleTrouble, fields: { msg?: string; error_name?: string; code?: number }): void => {
+    log.warn(EVENT, { state: kind, ...fields });
+    call(() => events.trouble(kind));
+  };
+
   const display = env.WAYLAND_DISPLAY;
   if (!display) {
-    log.warn(EVENT, { state: "unavailable", msg: "sin WAYLAND_DISPLAY" });
+    trouble("unavailable", { msg: "sin WAYLAND_DISPLAY" });
     return () => {};
   }
   const path = isAbsolute(display) ? display : join(env.XDG_RUNTIME_DIR ?? "", display);
@@ -86,8 +108,8 @@ export function watchWaylandIdle(
     const idle = seat ? find("ext_idle_notifier_v1") : undefined;
     const lock = find("hyprland_lock_notifier_v1");
     if (!idle && !lock) {
-      log.warn(EVENT, { state: "unavailable", msg: "el compositor no avisa inactividad ni bloqueo" });
       close();
+      trouble("unavailable", { msg: "el compositor no avisa inactividad ni bloqueo" });
       return;
     }
     const out: Buffer[] = [];
@@ -110,9 +132,9 @@ export function watchWaylandIdle(
       out.push(request(notifier, 1, [u32(lockNote)]));
     }
     socket?.write(Buffer.concat(out));
-    if (!idleNote) log.warn(EVENT, { state: "unavailable", msg: "el compositor no avisa inactividad (solo bloqueo)" });
-    if (!lockNote) log.warn(EVENT, { state: "no-lock", msg: "el compositor no avisa el bloqueo de pantalla" });
     log.info(EVENT, { state: "watching", mode, duration_ms: idleAfterMs });
+    if (!idleNote) trouble("no-idle", { msg: "el compositor no avisa inactividad (solo bloqueo)" });
+    if (!lockNote) trouble("no-lock", { msg: "el compositor no avisa el bloqueo de pantalla" });
   }
 
   function onMessage(obj: number, op: number, body: Buffer): void {
@@ -125,12 +147,13 @@ export function watchWaylandIdle(
     } else if (obj === SYNC && op === 0) {
       setup();
     } else if (obj === idleNote && idleNote !== 0) {
-      if (op === 0) events.idle();
+      if (op === 0) call(() => events.idle());
     } else if (obj === lockNote && lockNote !== 0) {
-      events.lock(op === 0);
+      call(() => events.lock(op === 0));
     } else if (obj === DISPLAY && op === 0) {
-      log.warn(EVENT, { state: "lost", msg: "error de protocolo Wayland", code: body.readUInt32LE(4) });
+      const code = body.readUInt32LE(4);
       close();
+      trouble("lost", { msg: "error de protocolo Wayland", code });
     }
   }
 
@@ -149,8 +172,8 @@ export function watchWaylandIdle(
           const obj = buf.readUInt32LE(0);
           const size = buf.readUInt32LE(4) >>> 16;
           if (size < 8) {
-            log.warn(EVENT, { state: "lost", msg: "mensaje Wayland inválido" });
-            return close();
+            close();
+            return trouble("lost", { msg: "mensaje Wayland inválido" });
           }
           if (buf.length < size) break;
           const op = buf.readUInt32LE(4) & 0xffff;
@@ -159,21 +182,23 @@ export function watchWaylandIdle(
           try {
             onMessage(obj, op, body);
           } catch {
-            log.warn(EVENT, { state: "lost", msg: "mensaje Wayland inválido" });
-            return close();
+            close();
+            return trouble("lost", { msg: "mensaje Wayland inválido" });
           }
         }
       },
       close() {
-        if (!stopped) log.warn(EVENT, { state: "lost", msg: "se cortó la conexión con el compositor" });
+        const lost = !stopped;
         stopped = true;
         socket = null;
+        if (lost) trouble("lost", { msg: "se cortó la conexión con el compositor" });
       },
       error() {},
     },
   }).catch((error: unknown) => {
-    if (!stopped) log.warn(EVENT, { state: "unavailable", error_name: error instanceof Error ? error.name : "unknown" });
+    const failed = !stopped;
     stopped = true;
+    if (failed) trouble("unavailable", { error_name: error instanceof Error ? error.name : "unknown" });
   });
 
   return close;
