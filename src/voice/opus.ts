@@ -11,6 +11,10 @@ export interface OpusCodec {
 }
 
 let lastLoadError = "";
+/** Si no se puede crear un módulo nuevo, cada paquete lo reintenta: el aviso va como mucho una vez por minuto. */
+const RESET_FAILED_LOG_MS = 60_000;
+let resetFailedLoggedAt = -Infinity;
+let resetFailures = 0;
 // El nativo no tiene prebuild para Bun 1.4.3: se prueba una sola vez y no en cada códec.
 let nativeAvailable: boolean | null = null;
 
@@ -88,8 +92,17 @@ export function createOpusCodec(opts?: { prefer?: "native" | "wasm" }): OpusCode
    */
   function moveToFreshModule(): void {
     const fresh = loadWasm();
-    log.warn("voice.codec-reset", { error_name: "RuntimeError", state: fresh ? "recreated" : "failed" });
-    if (fresh) opus = fresh;
+    if (fresh) {
+      log.warn("voice.codec-reset", { error_name: "RuntimeError", state: "recreated" });
+      opus = fresh;
+      return;
+    }
+    resetFailures += 1;
+    const now = Date.now();
+    if (now - resetFailedLoggedAt < RESET_FAILED_LOG_MS) return;
+    resetFailedLoggedAt = now;
+    log.warn("voice.codec-reset", { error_name: "RuntimeError", state: "failed", count: resetFailures });
+    resetFailures = 0;
   }
 
   function recover(error: unknown): never {

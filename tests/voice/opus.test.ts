@@ -1,5 +1,6 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 
+import { log } from "../../src/log/logger";
 import { createOpusCodec } from "../../src/voice/opus";
 import { createWasmOpus, setWasmModuleFactoryForTests } from "../../src/voice/opus-wasm";
 import { fakeOpusModule } from "../helpers/fake-opus-module";
@@ -169,6 +170,27 @@ test("destroying a codec whose WASM module was dropped does not call into the br
     expect(() => idle.destroy()).not.toThrow();
     a.destroy();
   } finally {
+    setWasmModuleFactoryForTests(null);
+  }
+});
+
+test("if a fresh WASM module cannot be created, voice.codec-reset is logged at most once a minute, not per packet", () => {
+  let modules = 0;
+  setWasmModuleFactoryForTests(() => {
+    modules += 1;
+    if (modules > 1) throw new Error("sin memoria para otro módulo");
+    return fakeOpusModule({ trapOn: 0xee });
+  });
+  const warn = spyOn(log, "warn");
+  try {
+    const a = createOpusCodec({ prefer: "wasm" });
+    expect(() => a.decode(Uint8Array.of(0xee))).toThrow(WebAssembly.RuntimeError);
+    // 5 s de una persona hablando (250 paquetes) con el módulo nuevo sin poder crearse.
+    for (let i = 0; i < 250; i += 1) expect(() => a.decode(Uint8Array.of(1))).toThrow();
+    const failed = warn.mock.calls.filter(([event, fields]) => event === "voice.codec-reset" && fields?.state === "failed");
+    expect(failed.length).toBe(1);
+  } finally {
+    warn.mockRestore();
     setWasmModuleFactoryForTests(null);
   }
 });
