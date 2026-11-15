@@ -236,13 +236,18 @@ audio de la PC sin el de zcord (ver "Audio de la PC" abajo; con grim o sin PipeW
 **Audio de la PC** (`src/golive/desktop-audio.ts`, 2026-11-15): un `pw-record --target 0` propio (nodo `zcord-golive-audio`,
 `node.always-process` para que mande silencio aunque no suene nada) escribe PCM s16 48 kHz estéreo directo en el fd 3 de ffmpeg,
 que lo pasa a Opus 128k en el mismo NUT (la librería solo acepta Opus). Cada 1 s se lee `pw-dump` y se enlazan con `pw-link` las
-salidas (`Stream/Output/Audio`) de las demás apps a ese nodo: no se mueve ningún stream. Sin eco: se saltean zcord y sus hijos
-directos (el `pw-cat` de la voz y el de los audios, por el pid del cliente en `/proc/<pid>/stat`) y los que mezclan todo
-(EasyEffects, loopbacks de pipewire/pipewire-pulse/wireplumber). No se usa el monitor del sink: ahí ya está mezclada la voz de la
-llamada. Los enlaces mueren con el nodo, y el nodo con pw-record (stop, o EPIPE si zcord se cae). Gotchas: el planificador de
+salidas (`Stream/Output/Audio`) de las demás apps a ese nodo: no se mueve ningún stream. Sin eco, a prueba de fallos: se saltean
+zcord y sus descendientes (el `pw-cat` de la voz y el de los audios, subiendo por los padres desde el pid del cliente en
+`/proc/<pid>/stat`), los que mezclan todo (EasyEffects, loopbacks de pipewire/pipewire-pulse/wireplumber) y lo que no se puede
+identificar (nodo sin cliente o cliente sin pid); en cada vuelta se deshacen con `pw-link -d` los enlaces a nuestro nodo que no
+deberían estar. Un par que pw-link rechaza se prueba 3 veces y se deja. No se usa el monitor del sink: ahí ya está mezclada la voz
+de la llamada. Los enlaces mueren con el nodo, y el nodo con pw-record (stop, o EPIPE si zcord se cae). Período de prueba: hasta
+que ffmpeg saque el primer dato y pasen 1,5 s con pw-record y ffmpeg vivos (4 s como mucho) no se llama a `playStream`; si falla,
+se reinicia la captura solo con video (`golive.no-audio`). Mientras tanto ya se le pide el stream a Discord (`createStream` una
+sola vez por transmisión). Mientras va el audio, la barra de voz dice `🔊 con audio de la PC`. Gotchas: el planificador de
 ffmpeg ≥7 no deja que una entrada se adelante más de 100 ms a otra, y wf-recorder sin `-D` no manda frames con la pantalla quieta
 (medido): con audio se usa `-D`. El primer paquete de Opus trae pts negativo y NUT lo rechaza: `-bsf:a setts=ts=TS-STARTPTS`. Si
-pw-record se muere a mitad, se corta la transmisión (la librería sincroniza el video contra el audio y se congelaría).
+pw-record se muere después del período de prueba, se corta la transmisión (la librería sincroniza el video contra el audio y se congelaría).
 
 **Protocolo** (`src/golive/shim.ts`, `golive.ts`): el `Streamer` de `@dank074/discord-video-stream` 7.0.0 sobre NUESTRO gateway;
 solo pasan los ops 18 `STREAM_CREATE {type, guild_id, channel_id, preferred_region:null}`, 22 `STREAM_SET_PAUSED {stream_key,
