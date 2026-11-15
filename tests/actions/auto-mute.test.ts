@@ -96,6 +96,30 @@ test("idle with the mic open in a call: mutes through toggleMute, a desktop noti
   expect(notice?.level).toBe("error"); // las de nivel error no se borran solas: sigue ahí cuando volvés
 });
 
+test("the notice goes away when Gon opens the mic again", () => {
+  const { fake, join, voice, store } = setup();
+  join();
+  fake.advance(10 * MIN);
+  const autoNotice = () => Object.values(store.getState().notices).find((n) => n.key === "voice-auto-mute");
+  expect(autoNotice()).toBeDefined();
+  store.dispatch({ type: "notice/sweep", now: Date.now() + 60 * MIN }); // el barrido de siempre no la borra
+  expect(autoNotice()).toBeDefined();
+  voice.toggleMute();
+  expect(autoNotice()).toBeUndefined();
+});
+
+test("the notice goes away when leaving the call (no 'm lo abre' outside a call), and a second auto-mute shows a fresh one", () => {
+  const { fake, join, store } = setup();
+  const autoNotice = () => Object.values(store.getState().notices).find((n) => n.key === "voice-auto-mute");
+  join();
+  fake.advance(10 * MIN);
+  store.dispatch({ type: "voice/left" });
+  expect(autoNotice()).toBeUndefined();
+  join();
+  fake.advance(10 * MIN);
+  expect(autoNotice()?.count).toBe(1);
+});
+
 test("activity anywhere keeps the mic open: only a whole idle period mutes", () => {
   const { fake, join, toggles } = setup();
   join();
