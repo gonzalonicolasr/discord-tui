@@ -7,6 +7,7 @@ import type { Store } from "../../store/store";
 import type { DecodedFrame } from "../../watch/decode";
 import type { FrameSubscription } from "../../watch/watch";
 import { displayName, truncate } from "../format";
+import { type CellBox, KittyVideo } from "../kitty-video";
 import { jsonEqual, useSelector } from "../store-bridge";
 import type { Theme } from "../theme";
 import { Button } from "./Button";
@@ -45,10 +46,26 @@ export function StreamViewer(props: { store: Store; theme: Theme; voice: VoiceAc
   let sub: FrameSubscription | null = null;
   let shownThisSecond = 0;
   let lastBox = "";
+  // Sin transporte por archivo el `<image>` borra antes de colocar (parpadeo en herdr-core): el video va por KittyVideo.
+  let video: KittyVideo | null = null;
+  const ownKitty = (): boolean => !!image && image.effectiveProtocol === "kitty" && renderer.kittyImageTransportStatus.fileState !== "ready";
+  let frameSize = { width: 0, height: 0 };
+  /** Dónde coloca la imagen el `<image>` (centrada y ajustada a su caja), para que KittyVideo la ponga igual. */
+  function cellBox(): CellBox {
+    const img = image!;
+    const fit = img.getFittedSize(img.width, img.height, img.cellAspectRatio, frameSize.width, frameSize.height);
+    return {
+      col: img.screenX + Math.floor((img.width - fit.width) / 2),
+      row: img.screenY + Math.floor((img.height - fit.height) / 2),
+      cols: fit.width,
+      rows: fit.height,
+    };
+  }
 
   const fpsTimer = setInterval(() => {
-    setFps(shownThisSecond);
+    setFps(shownThisSecond + (video?.written ?? 0));
     shownThisSecond = 0;
+    if (video) video.written = 0;
   }, 1000);
 
   function areaBox(): { width: number; height: number } {
@@ -66,6 +83,15 @@ export function StreamViewer(props: { store: Store; theme: Theme; voice: VoiceAc
       sub?.resize(box.width, box.height);
     }
     try {
+      if (ownKitty()) {
+        if (image.source) image.source = undefined;
+        video ??= new KittyVideo(renderer.nativeScene.driver);
+        frameSize = { width: frame.width, height: frame.height };
+        if (!hasFrame()) return void setHasFrame(true); // la caja recién crece en la pintada siguiente
+        video.show(frame.rgba, frame.width, frame.height, cellBox());
+        return;
+      }
+      if (video) (video.dispose(), (video = null));
       if (!pool || pool.width !== frame.width || pool.height !== frame.height) {
         pool?.dispose();
         pool = new NativeImagePool({ width: frame.width, height: frame.height, capacity: 3, owner: renderer.nativeScene.resourceContext });
@@ -86,6 +112,8 @@ export function StreamViewer(props: { store: Store; theme: Theme; voice: VoiceAc
   sub = props.voice?.watchFrames?.(start.width, start.height, show) ?? null;
   onCleanup(() => {
     clearInterval(fpsTimer);
+    video?.dispose();
+    video = null;
     sub?.unsubscribe();
     sub = null;
     pool?.dispose();
@@ -134,6 +162,7 @@ export function StreamViewer(props: { store: Store; theme: Theme; voice: VoiceAc
         </Show>
         <image
           ref={(node: ImageRenderable) => (image = node)}
+          renderAfter={() => video && queueMicrotask(() => video && image && !image.isDestroyed && video.move(cellBox()))}
           width="100%"
           flexGrow={hasFrame() ? 1 : 0}
           height={hasFrame() ? undefined : 0}
