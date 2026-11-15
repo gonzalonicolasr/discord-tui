@@ -330,3 +330,33 @@ test("deafened with someone talking: their decoder is kept and their speaking in
   expect(speaking).toEqual(["a:true"]);
   expect(destroyed).toBe(0);
 });
+
+test("the session's speaking-end (100 ms without packets in @discordjs/voice) does not end the phrase in the jitter buffer", () => {
+  const opusListeners = new Set<(userId: string, opus: Uint8Array) => void>();
+  const speakingListeners = new Set<(userId: string, on: boolean) => void>();
+  const ended: string[] = [];
+  const speaking: string[] = [];
+  createReceiver({
+    session: {
+      onOpus: (fn) => (opusListeners.add(fn), () => opusListeners.delete(fn)),
+      onSpeaking: (fn) => (speakingListeners.add(fn), () => speakingListeners.delete(fn)),
+    },
+    mixer: {
+      buffer: (userId) => ({ push: () => {}, pop: () => null, size: 0, reset: () => {}, end: () => void ended.push(userId) }),
+      remove: () => {},
+    },
+    makeDecoder: () => ({ decode: (o: Uint8Array) => o }),
+    isDeaf: () => false,
+    onSpeaking: (userId, on) => void speaking.push(`${userId}:${on}`),
+    setTimer: (() => 0) as never,
+    clearTimer: (() => {}) as never,
+  });
+  opusListeners.forEach((fn) => fn("u", Uint8Array.of(1, 2, 3, 4)));
+  // La red retuvo los paquetes 120 ms: @discordjs/voice avisa "dejó de hablar" a los 100 ms.
+  speakingListeners.forEach((fn) => fn("u", false));
+  expect(ended).toEqual([]);
+  expect(speaking).toEqual(["u:true", "u:false"]); // el indicador sí se apaga
+  // El frame de silencio (en orden con la voz) sí termina la frase.
+  opusListeners.forEach((fn) => fn("u", SILENCE_FRAME));
+  expect(ended).toEqual(["u"]);
+});

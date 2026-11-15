@@ -231,7 +231,9 @@ export function createReceiver(deps: {
       setSpeaking(userId, true);
       armTimeout(userId);
     } else {
-      endTalk(userId);
+      // Solo el indicador: @discordjs/voice avisa "dejó de hablar" a los 100 ms sin paquetes, y una ráfaga de red
+      // de 100-200 ms a mitad de frase no es el fin de la frase (el jitter buffer tiene que aprender ese hueco).
+      // El fin lo marcan el frame de silencio, que viaja en orden con la voz, o los 300 ms sin paquetes de acá.
       setSpeaking(userId, false);
     }
   });
