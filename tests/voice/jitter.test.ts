@@ -58,3 +58,32 @@ describe("createJitterBuffer", () => {
     expect(jb.pop()).toBeNull();
   });
 });
+
+describe("jitter buffer diagnostics", () => {
+  test("emptying in the middle of a phrase counts as an underrun when audio comes back; a full buffer counts drops", () => {
+    const jb = createJitterBuffer({ maxFrames: 4 });
+    for (let i = 1; i <= 3; i += 1) jb.push(pcmOf(i));
+    for (let i = 0; i < 4; i += 1) jb.pop(); // 3 frames y un slot vacío
+    jb.push(pcmOf(4)); // el audio vuelve: fue un corte
+    for (let i = 5; i <= 10; i += 1) jb.push(pcmOf(i)); // 7 en un buffer de 4: tira 3
+    expect(jb.takeStats!()).toEqual({ underruns: 1, drops: 3 });
+    expect(jb.takeStats!()).toEqual({ underruns: 0, drops: 0 });
+  });
+
+  test("emptying after the speaker ended the phrase is not an underrun", () => {
+    const jb = createJitterBuffer();
+    for (let i = 1; i <= 3; i += 1) jb.push(pcmOf(i));
+    jb.end!();
+    for (let i = 0; i < 5; i += 1) jb.pop();
+    jb.push(pcmOf(4));
+    expect(jb.takeStats!().underruns).toBe(0);
+  });
+
+  test("audio that comes back after a long pause is a new phrase, not an underrun", () => {
+    const jb = createJitterBuffer();
+    for (let i = 1; i <= 3; i += 1) jb.push(pcmOf(i));
+    for (let i = 0; i < 3 + 30; i += 1) jb.pop(); // 600 ms sin nada
+    jb.push(pcmOf(4));
+    expect(jb.takeStats!().underruns).toBe(0);
+  });
+});

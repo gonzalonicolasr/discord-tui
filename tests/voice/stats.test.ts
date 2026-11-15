@@ -23,3 +23,42 @@ test("stats log only allowlisted fields every 60 s", () => {
 test("privacy code is grouped by 5 digits", () => {
   expect(formatPrivacyCode("123451234512")).toBe("12345 12345 12");
 });
+
+test("stats also log the dropout diagnostics (aggregated counters only)", () => {
+  const logged: { event: string; fields: unknown }[] = [];
+  let tick: (() => void) | null = null;
+  createVoiceStats({
+    log: { info: (event, fields) => void logged.push({ event, fields }) },
+    read: () => ({
+      packets: 10,
+      decodeErrors: 0,
+      state: "connected",
+      underruns: 3,
+      jitterDrops: 1,
+      arrivalP95Ms: 25,
+      arrivalMaxMs: 140.4,
+      lateTicks: 2,
+      skippedFrames: 0,
+      loopLagMaxMs: 61,
+      playbackPending: 4,
+      playbackDropped: 0,
+    }),
+    setTimer: (fn) => ((tick = fn), 1),
+    clearTimer: () => {},
+  });
+  tick!();
+  expect(logged[0]!.fields).toEqual({
+    packets: 10,
+    decode_errors: 0,
+    state: "connected",
+    underruns: 3,
+    jitter_drops: 1,
+    arrival_p95_ms: 25,
+    arrival_max_ms: 140,
+    late_ticks: 2,
+    skipped_frames: 0,
+    loop_lag_max_ms: 61,
+    playback_pending: 4,
+    playback_dropped: 0,
+  });
+});

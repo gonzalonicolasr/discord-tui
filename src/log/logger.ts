@@ -27,6 +27,15 @@ export const ALLOWED_FIELDS = [
   "decode_errors",
   "peak_db",
   "ref_db",
+  "underruns",
+  "jitter_drops",
+  "arrival_p95_ms",
+  "arrival_max_ms",
+  "late_ticks",
+  "skipped_frames",
+  "loop_lag_max_ms",
+  "playback_pending",
+  "playback_dropped",
 ] as const;
 
 export type AllowedField = (typeof ALLOWED_FIELDS)[number];

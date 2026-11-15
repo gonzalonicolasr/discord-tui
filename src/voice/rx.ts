@@ -4,7 +4,11 @@ import type { Mixer } from "./mixer";
 import type { VoiceSession } from "./session";
 
 export interface Receiver {
-  stats(): { packets: number; decodeErrors: number; usersActive: number; peakDb: number };
+  /**
+   * `arrivalP95Ms`/`arrivalMaxMs`: intervalo entre paquetes de voz seguidos de una misma persona en la ventana
+   * (20 ms si la red viene pareja; la sesión no expone el número de secuencia RTP).
+   */
+  stats(): { packets: number; decodeErrors: number; usersActive: number; peakDb: number; arrivalP95Ms: number; arrivalMaxMs: number };
   removeUser(userId: string): void;
   stop(): void;
 }
@@ -25,6 +29,9 @@ const IDLE_DECODER_MS = 2 * 60_000;
 const IDLE_SWEEP_MS = 10_000;
 const DECODER_RETRY_MS = 5_000;
 const DECODER_ERROR_LOG_MS = 60_000;
+/** Intervalos entre llegadas: histograma de a 5 ms hasta 1 s (más que eso es una pausa, no jitter). */
+const ARRIVAL_BUCKET_MS = 5;
+const ARRIVAL_MAX_MS = 1_000;
 
 /**
  * Opus de cada participante → un decoder por usuario → jitter buffer del mixer.
@@ -60,6 +67,11 @@ export function createReceiver(deps: {
   let lastSweep = now();
   let lastErrorReport = -Infinity;
   let unreportedFailures = 0;
+  /** userId → llegada del último paquete de voz (se borra con el silencio: la pausa no es jitter). */
+  const lastArrival = new Map<string, number>();
+  let arrivals = new Uint32Array(ARRIVAL_MAX_MS / ARRIVAL_BUCKET_MS + 1);
+  let arrivalCount = 0;
+  let arrivalMaxMs = 0;
   const silenceRun = new Map<string, number>();
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
   const speaking = new Set<string>();
@@ -76,6 +88,34 @@ export function createReceiver(deps: {
     deps.onSpeaking(userId, on);
   }
 
+  /** Terminó la frase: que el jitter buffer no lo cuente como corte cuando se vacíe. */
+  function endTalk(userId: string): void {
+    lastArrival.delete(userId);
+    if (decoders.has(userId)) deps.mixer.buffer(userId).end?.();
+  }
+
+  function recordArrival(userId: string, at: number): void {
+    const last = lastArrival.get(userId);
+    lastArrival.set(userId, at);
+    if (last === undefined) return;
+    const gap = at - last;
+    if (gap < 0 || gap > ARRIVAL_MAX_MS) return;
+    arrivals[Math.floor(gap / ARRIVAL_BUCKET_MS)]! += 1;
+    arrivalCount += 1;
+    if (gap > arrivalMaxMs) arrivalMaxMs = gap;
+  }
+
+  function arrivalP95(): number {
+    if (arrivalCount === 0) return 0;
+    const rank = Math.ceil(arrivalCount * 0.95);
+    let seen = 0;
+    for (let i = 0; i < arrivals.length; i += 1) {
+      seen += arrivals[i]!;
+      if (seen >= rank) return (i + 1) * ARRIVAL_BUCKET_MS;
+    }
+    return ARRIVAL_MAX_MS;
+  }
+
   function armTimeout(userId: string): void {
     const previous = timers.get(userId);
     if (previous !== undefined) clearTimer(previous);
@@ -83,6 +123,7 @@ export function createReceiver(deps: {
       userId,
       setTimer(() => {
         timers.delete(userId);
+        endTalk(userId);
         setSpeaking(userId, false);
       }, SPEAKING_TIMEOUT_MS),
     );
@@ -110,10 +151,12 @@ export function createReceiver(deps: {
     if (isSilence(opus)) {
       const run = (silenceRun.get(userId) ?? 0) + 1;
       silenceRun.set(userId, run);
+      if (run === 1) endTalk(userId);
       if (run >= SILENCE_END) setSpeaking(userId, false);
       return;
     }
     silenceRun.set(userId, 0);
+    recordArrival(userId, at);
     setSpeaking(userId, true);
     armTimeout(userId);
     if (deps.isDeaf()) return;
@@ -181,7 +224,10 @@ export function createReceiver(deps: {
     if (on) {
       setSpeaking(userId, true);
       armTimeout(userId);
-    } else setSpeaking(userId, false);
+    } else {
+      endTalk(userId);
+      setSpeaking(userId, false);
+    }
   });
 
   function removeUser(userId: string): void {
@@ -192,6 +238,7 @@ export function createReceiver(deps: {
     }
     decoders.delete(userId);
     lastHeard.delete(userId);
+    lastArrival.delete(userId);
     failedUntil.delete(userId);
     silenceRun.delete(userId);
     const timer = timers.get(userId);
@@ -203,8 +250,11 @@ export function createReceiver(deps: {
 
   return {
     stats() {
-      const out = { packets, decodeErrors, usersActive: decoders.size, peakDb };
+      const out = { packets, decodeErrors, usersActive: decoders.size, peakDb, arrivalP95Ms: arrivalP95(), arrivalMaxMs: Math.round(arrivalMaxMs) };
       peakDb = -96;
+      arrivals = new Uint32Array(arrivals.length);
+      arrivalCount = 0;
+      arrivalMaxMs = 0;
       return out;
     },
     removeUser,

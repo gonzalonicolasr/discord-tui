@@ -246,6 +246,28 @@ describe("startPlayback", () => {
     await playback.stop();
   });
 
+  test("writes that pw-cat did not take right away (flush still pending) are counted", async () => {
+    let pendingFlushes = 2;
+    const spawn: SpawnLike = () => ({
+      stdin: {
+        write: () => 3840,
+        flush: () => (pendingFlushes-- > 0 ? new Promise<number>(() => {}) : 3840),
+        end: () => {},
+      },
+      stdout: null,
+      stderr: null,
+      exited: new Promise<number>(() => {}),
+      killed: false,
+      kill: () => {},
+    });
+    const playback = await startPlayback({ spawn });
+    for (let i = 0; i < 4; i += 1) {
+      playback.write(new Uint8Array(FRAME_BYTES));
+      await Bun.sleep(1);
+    }
+    expect(playback.pending?.()).toBe(2);
+  });
+
   test("stop closes pw-cat's input (it ignores SIGTERM while stdin is open)", async () => {
     const fake = fakeSpawn();
     const playback = await startPlayback({ spawn: fake.spawn });

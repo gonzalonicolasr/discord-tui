@@ -273,3 +273,28 @@ describe("mixer.play (event sounds)", () => {
     expect(h.writes.map((w) => sampleAt(w, 0))).toEqual([0, 0, 7]);
   });
 });
+
+describe("mixer diagnostics", () => {
+  test("late ticks, skipped slots and the worst event-loop delay are counted per window", () => {
+    const h = harness();
+    h.mixer.start();
+    h.advance(20); // a tiempo
+    h.advance(65); // 3 slots juntos: atraso de 45 ms
+    h.advance(200); // 10 slots (quedaban 5 ms del anterior): se mezclan 5 y se saltean 5, 185 ms tarde
+    expect(h.mixer.stats()).toEqual({ underruns: 0, jitterDrops: 0, lateTicks: 2, skippedFrames: 5, loopLagMaxMs: 185 });
+    expect(h.mixer.stats()).toEqual({ underruns: 0, jitterDrops: 0, lateTicks: 0, skippedFrames: 0, loopLagMaxMs: 0 });
+  });
+
+  test("jitter buffer underruns of everyone (including people who were removed) are added up", () => {
+    const h = harness();
+    h.mixer.start();
+    for (const user of ["a", "b"]) {
+      fill(h, user, 100, 3);
+    }
+    for (let i = 0; i < 4; i += 1) h.advance(20);
+    fill(h, "a", 100, 1);
+    fill(h, "b", 100, 1);
+    h.mixer.remove("b");
+    expect(h.mixer.stats().underruns).toBe(2);
+  });
+});

@@ -260,3 +260,37 @@ test("decoders that cannot be created are retried later, and the failures are lo
   for (const u of users) h.send(u);
   for (const u of users) expect(h.pushed).toContain(u);
 });
+
+test("stats report the gap between someone's voice packets (p95 and max) and reset each window; pauses are not jitter", () => {
+  const opusListeners = new Set<(userId: string, opus: Uint8Array) => void>();
+  let clock = 0;
+  const ended: string[] = [];
+  const rx = createReceiver({
+    session: { onOpus: (fn) => (opusListeners.add(fn), () => opusListeners.delete(fn)), onSpeaking: () => () => {} },
+    mixer: {
+      buffer: (userId) => ({ push: () => {}, pop: () => null, size: 0, reset: () => {}, end: () => void ended.push(userId) }),
+      remove: () => {},
+    },
+    makeDecoder: () => ({ decode: (o: Uint8Array) => o }),
+    isDeaf: () => false,
+    onSpeaking: () => {},
+    now: () => clock,
+    setTimer: (() => 0) as never,
+    clearTimer: (() => {}) as never,
+  });
+  const send = (at: number, opus: Uint8Array = Uint8Array.of(1, 2, 3, 4)) => {
+    clock = at;
+    opusListeners.forEach((fn) => fn("u", opus));
+  };
+  // 20 paquetes cada 20 ms y uno que llega 140 ms tarde.
+  for (let i = 0; i < 20; i += 1) send(i * 20);
+  send(19 * 20 + 140);
+  // Termina la frase (silencio) y vuelve 2 s después: esa pausa no cuenta.
+  send(1_000, SILENCE_FRAME);
+  send(3_000);
+  const stats = rx.stats();
+  expect(stats.arrivalMaxMs).toBe(140);
+  expect(stats.arrivalP95Ms).toBe(25);
+  expect(ended).toEqual(["u"]);
+  expect(rx.stats().arrivalMaxMs).toBe(0);
+});

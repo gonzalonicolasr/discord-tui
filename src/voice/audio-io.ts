@@ -126,6 +126,12 @@ export interface AudioPlayback {
   write(pcm: Uint8Array): void;
   stop(): Promise<void>;
   dropped(): number;
+  /** Escrituras a pw-cat que quedaron con datos pendientes (el pipe estaba lleno: pw-cat no lee al ritmo). */
+  pending?(): number;
+}
+
+function isPromise(value: unknown): boolean {
+  return !!value && typeof (value as Promise<unknown>).then === "function";
 }
 
 /** Si la escritura devuelve una promesa (FileSink de Bun), sus rechazos (EPIPE) se tragan acá. */
@@ -157,6 +163,7 @@ export async function startPlayback(opts?: {
   const maxQueued = opts?.queuedFrames ?? 10;
   const queue: Uint8Array[] = [];
   let droppedCount = 0;
+  let pendingCount = 0;
   let pumping = false;
   let closed = false;
   // Si pw-cat ya salió (se cambia cada tanto por el reloj, o se cerró la salida), write/flush/end fallan con
@@ -178,7 +185,9 @@ export async function startPlayback(opts?: {
       if (frame) {
         try {
           quiet(proc.stdin?.write(frame));
-          quiet(proc.stdin?.flush?.());
+          const flushed = proc.stdin?.flush?.();
+          if (isPromise(flushed)) pendingCount += 1;
+          quiet(flushed);
         } catch {
           // pw-cat ya no está
         }
@@ -199,6 +208,9 @@ export async function startPlayback(opts?: {
     },
     dropped(): number {
       return droppedCount;
+    },
+    pending(): number {
+      return pendingCount;
     },
     async stop(): Promise<void> {
       // pw-cat ignora SIGTERM mientras tiene la entrada abierta: se cierra stdin y, si no sale, SIGKILL.

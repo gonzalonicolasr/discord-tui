@@ -243,9 +243,29 @@ export function createVoiceActions(deps: {
       store.dispatch({ type: "notice/push", key: "voice-mic", level: "warn", text: errorText(error) });
     }
 
+    const outputSeen = new WeakMap<AudioPlayback, { dropped: number; pending: number }>();
     stats = createVoiceStats({
       log,
-      read: () => ({ ...(rx?.stats() ?? { packets: 0, decodeErrors: 0 }), state: voice().status }),
+      read: () => {
+        const out = playback;
+        let playbackDropped = 0;
+        let playbackPending = 0;
+        if (out) {
+          // Contadores acumulados de cada pw-cat (se renueva cada tanto): se loguea lo de la ventana.
+          const before = outputSeen.get(out) ?? { dropped: 0, pending: 0 };
+          const now = { dropped: out.dropped(), pending: out.pending?.() ?? 0 };
+          playbackDropped = now.dropped - before.dropped;
+          playbackPending = now.pending - before.pending;
+          outputSeen.set(out, now);
+        }
+        return {
+          ...(rx?.stats() ?? { packets: 0, decodeErrors: 0 }),
+          ...(mixer?.stats() ?? {}),
+          playbackDropped,
+          playbackPending,
+          state: voice().status,
+        };
+      },
       every: 30_000,
     });
     refreshTimer = setInterval(() => void refreshPlayback(generation), deps.refresh?.checkMs ?? 10_000);

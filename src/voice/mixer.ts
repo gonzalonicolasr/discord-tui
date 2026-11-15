@@ -2,6 +2,20 @@ import { FRAME_BYTES, FRAME_MS } from "./constants";
 import { applyGain } from "./gain";
 import { createJitterBuffer, type JitterBuffer } from "./jitter";
 
+/** Diagnóstico de una ventana (sin ids de usuario). */
+export interface MixerStats {
+  /** Jitter buffers que se vaciaron a mitad de una frase. */
+  underruns: number;
+  /** Frames tirados porque el jitter buffer estaba lleno. */
+  jitterDrops: number;
+  /** Ticks que llegaron con 2 o más slots de atraso. */
+  lateTicks: number;
+  /** Slots salteados tras una pausa larga del event loop. */
+  skippedFrames: number;
+  /** El mayor atraso de un tick respecto de su slot (≈ atraso del event loop), en ms. */
+  loopLagMaxMs: number;
+}
+
 const MAX_CATCH_UP_FRAMES = 5;
 
 /** Suma frames s16le saturando a [-32768, 32767]. Sin frames → silencio de FRAME_BYTES. */
@@ -37,6 +51,19 @@ export interface Mixer {
    * aunque estés ensordecido (los avisos de mute/deafen tienen que oírse).
    */
   play(frames: Uint8Array[]): void;
+  /** Contadores desde la última lectura (y los pone en cero). */
+  stats(): MixerStats;
+}
+
+function emptyStats(): MixerStats {
+  return { underruns: 0, jitterDrops: 0, lateTicks: 0, skippedFrames: 0, loopLagMaxMs: 0 };
+}
+
+function addJitterStats(into: MixerStats, jb: JitterBuffer): void {
+  const s = jb.takeStats?.();
+  if (!s) return;
+  into.underruns += s.underruns;
+  into.jitterDrops += s.drops;
 }
 
 export function createMixer(deps: {
@@ -63,6 +90,7 @@ export function createMixer(deps: {
   let muted = false;
   let timer: unknown = null;
   let clock = 0;
+  let tally: MixerStats = emptyStats();
 
   const continuous = deps.continuous === true;
   const preroll = deps.prerollFrames ?? 4;
@@ -117,7 +145,10 @@ export function createMixer(deps: {
     const t = now();
     const due = Math.floor((t - clock) / FRAME_MS);
     if (due <= 0) return;
+    tally.loopLagMaxMs = Math.max(tally.loopLagMaxMs, Math.round(t - clock - FRAME_MS));
+    if (due >= 2) tally.lateTicks += 1;
     if (due > MAX_CATCH_UP_FRAMES) {
+      tally.skippedFrames += due - MAX_CATCH_UP_FRAMES;
       for (let i = 0; i < MAX_CATCH_UP_FRAMES; i += 1) mixSlot();
       clock = t;
       // Después de una pausa larga del event loop el colchón de pw-cat se gastó: se repone.
@@ -138,6 +169,8 @@ export function createMixer(deps: {
       return jb;
     },
     remove(userId: string): void {
+      const jb = buffers.get(userId);
+      if (jb) addJitterStats(tally, jb);
       buffers.delete(userId);
     },
     start(): void {
@@ -166,6 +199,12 @@ export function createMixer(deps: {
     },
     idleMs(): number {
       return now() - lastAudioAt;
+    },
+    stats(): MixerStats {
+      for (const jb of buffers.values()) addJitterStats(tally, jb);
+      const out = tally;
+      tally = emptyStats();
+      return out;
     },
     play(frames: Uint8Array[]): void {
       if (frames.length === 0) return;
