@@ -175,3 +175,37 @@ test("the help overlay and the quick switcher cover the stream the same way as O
   for (let i = 0; i < native.marks.length; i++) expect(diff(i, mine.marks[i]!, native.marks[i]!)).toEqual({ mark: i, extra: [], missing: [] });
   expect(mine.gaps).toBe(0);
 });
+
+test("while the file probe is still running the stream goes through OpenTUI's image, exactly as before", async () => {
+  const term = fakeKittyTerminal({ cols: COLS, rows: ROWS, fileOk: true, fileDelayMs: 300 });
+  let push: ((f: DecodedFrame) => void) | null = null;
+  const voice = { watchFrames: (_w: number, _h: number, fn: (f: DecodedFrame) => void) => ((push = fn), { resize() {}, unsubscribe() {} }) };
+  const h = await testRender(() => <StreamViewer store={buildDemoStore()} theme={THEMES.dark} voice={voice as never} />, {
+    width: COLS,
+    height: ROWS,
+    stdin: term.stdin as never,
+    stdout: term.stdout as never,
+    bufferedOutput: "stdout",
+    remote: false,
+    kittyImageTransport: KITTY_IMAGE_TRANSPORT,
+  });
+  await h.renderer.setupTerminal();
+  for (let i = 0; i < 40 && !h.renderer.capabilities?.kitty_graphics; i++) await Bun.sleep(5);
+  expect(h.renderer.kittyImageTransportStatus.fileState).toBe("probing");
+  const out = new Uint8Array(480 * 270 * 4);
+  for (let t = 0; t < 4; t++) {
+    push!(syntheticFrame(480, 270, t, out));
+    await settle(h);
+  }
+  for (let i = 0; i < 80 && h.renderer.kittyImageTransportStatus.fileState === "probing"; i++) await Bun.sleep(10);
+  expect(h.renderer.kittyImageTransportStatus.fileState).toBe("ready");
+  for (let t = 4; t < 7; t++) {
+    push!(syntheticFrame(480, 270, t, out));
+    await settle(h);
+  }
+  const all = term.writes.join("");
+  await h.dispose();
+  expect(all.includes("\x1b7\x1b[")).toBe(false); // ninguna colocación propia
+  expect(all.includes("o=z")).toBe(false); // ni el sondeo de zlib
+  expect(placedCells(all).cells.size).toBeGreaterThan(1000); // el video sí se vio, por el <image>
+});

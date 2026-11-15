@@ -18,6 +18,9 @@ const CELL_H = 20;
 const MAX_W = 960;
 const MAX_H = 540;
 
+/** Estados del sondeo del archivo en los que ya se sabe que no anda: el video va por KittyVideo. */
+const FILE_FAILED = new Set(["unsupported", "timeout", "io-error"]);
+
 /** Renderers cuya terminal ya dijo que entiende zlib (`o=z`). Un "no" o el silencio se vuelven a preguntar al mirar otra vez. */
 const zlibTerminals = new WeakSet<object>();
 
@@ -50,11 +53,18 @@ export function StreamViewer(props: { store: Store; theme: Theme; voice: VoiceAc
   let shownThisSecond = 0;
   let lastBox = "";
   // Sin transporte por archivo el `<image>` borra antes de colocar (parpadeo en herdr-core): el video va por KittyVideo.
+  // Se decide una vez que el sondeo del archivo terminó; mientras sondea (y si anda) sigue el `<image>`, como siempre.
+  let path: "image" | "own" | null = null;
   let video: KittyVideo | null = null;
   let frameSize = { width: 0, height: 0 };
   let videoView: VideoView | null = null;
   function decidePath(): "image" | "own" {
-    return image!.effectiveProtocol === "kitty" && renderer.kittyImageTransportStatus.fileState !== "ready" ? "own" : "image";
+    if (path) return path;
+    if (!renderer.capabilities) return "image";
+    if (image!.effectiveProtocol !== "kitty") return (path = "image");
+    const state = renderer.kittyImageTransportStatus.fileState;
+    if (state === "probing") return "image";
+    return (path = FILE_FAILED.has(state) ? "own" : "image");
   }
   /**
    * Dónde y qué partes de la imagen se ven: la caja como la coloca el `<image>` (centrada y ajustada), menos las celdas
@@ -139,7 +149,6 @@ export function StreamViewer(props: { store: Store; theme: Theme; voice: VoiceAc
         video.show(frame.rgba, frame.width, frame.height, videoView);
         return;
       }
-      if (video) (renderer.off("frame", onPresented), video.dispose(), (video = null), (videoView = null));
       if (!pool || pool.width !== frame.width || pool.height !== frame.height) {
         pool?.dispose();
         pool = new NativeImagePool({ width: frame.width, height: frame.height, capacity: 3, owner: renderer.nativeScene.resourceContext });
