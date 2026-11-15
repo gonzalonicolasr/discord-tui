@@ -8,12 +8,53 @@
  *
  * Las secuencias van por la misma cola ordenada que los cuadros de OpenTUI (`NativeSession.write`). Un cuadro por
  * vez: mientras uno se está escribiendo, solo se guarda el último que llegó y se saltean los del medio.
+ *
+ * Si la terminal contesta que entiende píxeles comprimidos (`probeZlib`), los cuadros van con zlib (`o=z`): una
+ * pantalla compartida con texto pesa varias veces menos y llegan más cuadros por segundo. Sin respuesta, sin zlib.
  */
+import { deflateSync } from "node:zlib";
 
 /** Lo que usa de la `NativeSession` del renderer (`renderer.nativeScene.driver`). */
 export interface KittyOutput {
   write(bytes: Uint8Array): boolean;
   idle(): Promise<void>;
+}
+
+/** Para leer la respuesta de la terminal (el renderer: le llegan las respuestas kitty que no son suyas). */
+export interface KittyInput {
+  prependInputHandler(handler: (sequence: string) => boolean): void;
+  removeInputHandler(handler: (sequence: string) => boolean): void;
+}
+
+/**
+ * Pregunta a la terminal si acepta una imagen comprimida con zlib (`a=q` con `o=z`, que no guarda nada). `true` solo
+ * con un `OK` para esa consulta; un error o el silencio (herdr-core sin cliente no contesta) dan `false`.
+ */
+export function probeZlib(out: KittyOutput, input: KittyInput, timeoutMs = 3000): Promise<boolean> {
+  const id = 0x40000000 + Math.floor(Math.random() * 0x3ffffff0);
+  const pixel = deflateSync(Buffer.from([0, 0, 0])).toString("base64");
+  return new Promise((resolve) => {
+    const finish = (ok: boolean): void => {
+      clearTimeout(timer);
+      input.removeInputHandler(handler);
+      resolve(ok);
+    };
+    const handler = (seq: string): boolean => {
+      const m = new RegExp(`^\x1b_Gi=${id}(?:,[^;]*)?;([^\x1b]*)\x1b\\\\`).exec(seq);
+      if (!m) return false;
+      finish(m[1] === "OK");
+      return true;
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    input.prependInputHandler(handler);
+    let sent = false;
+    try {
+      sent = out.write(Buffer.from(`\x1b_Ga=q,i=${id},f=24,s=1,v=1,o=z;${pixel}\x1b\\`, "latin1"));
+    } catch {
+      // renderer cerrándose
+    }
+    if (!sent) finish(false);
+  });
 }
 
 /** Dónde va la imagen, en celdas (0 = primera columna/fila). */
@@ -38,6 +79,8 @@ export class KittyVideo {
   private rgb = new Uint8Array(0);
   /** Cuadros que llegaron a la salida (los salteados no cuentan), para los fps del encabezado. */
   written = 0;
+  /** La terminal entiende `o=z` (ver `probeZlib`). */
+  zlib = false;
 
   constructor(private readonly out: KittyOutput) {
     const base = 0x40000000 + Math.floor(Math.random() * 0x3ffffff0);
@@ -98,11 +141,12 @@ export class KittyVideo {
       rgb[j + 1] = rgba[i + 1]!;
       rgb[j + 2] = rgba[i + 2]!;
     }
-    const data = Buffer.from(rgb.buffer, rgb.byteOffset, rgb.length).toString("base64");
+    const pixels = Buffer.from(rgb.buffer, rgb.byteOffset, rgb.length);
+    const data = (this.zlib ? deflateSync(pixels, { level: 1 }) : pixels).toString("base64");
     const parts: string[] = [];
     for (let at = 0; at < data.length; at += CHUNK) {
       const more = at + CHUNK < data.length ? 1 : 0;
-      const head = at === 0 ? `a=t,f=24,s=${width},v=${height},i=${id},m=${more},q=2` : `m=${more},q=2`;
+      const head = at === 0 ? `a=t,f=24${this.zlib ? ",o=z" : ""},s=${width},v=${height},i=${id},m=${more},q=2` : `m=${more},q=2`;
       parts.push(`\x1b_G${head};${data.slice(at, at + CHUNK)}\x1b\\`);
     }
     return parts.join("");

@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
+import { inflateSync } from "node:zlib";
 
-import { KittyVideo } from "../../src/ui/kitty-video";
+import { KittyVideo, probeZlib } from "../../src/ui/kitty-video";
 
 const BOX = { col: 1, row: 3, cols: 40, rows: 12 };
 const px = (w: number, h: number): Uint8Array => new Uint8Array(w * h * 4).fill(200);
@@ -74,4 +75,56 @@ test("only the latest frame waits while one is being written, moves re-place, cl
   expect(ids(o.writes.at(-1)!, /a=d,d=I,i=(\d+)/g)).toHaveLength(2);
   v.show(px(8, 4), 8, 4, BOX);
   expect(o.writes).toHaveLength(4);
+});
+
+/** Terminal falsa para el sondeo: contesta `reply` (o nada) a la consulta `a=q,o=z`. */
+function zlibTerminal(reply: ((id: string) => string) | null) {
+  const handlers: ((seq: string) => boolean)[] = [];
+  const writes: string[] = [];
+  const out = {
+    write(b: Uint8Array) {
+      const text = Buffer.from(b).toString("latin1");
+      writes.push(text);
+      const q = /\x1b_Ga=q,[^;]*o=z[^;]*i=(\d+)|\x1b_Ga=q,[^;]*i=(\d+)[^;]*o=z/.exec(text);
+      const id = q?.[1] ?? q?.[2];
+      if (id && reply) setTimeout(() => handlers.slice().forEach((h) => h(reply(id))), 1);
+      return true;
+    },
+    idle: () => Promise.resolve(),
+  };
+  const input = {
+    prependInputHandler: (h: (seq: string) => boolean) => void handlers.push(h),
+    removeInputHandler: (h: (seq: string) => boolean) => void handlers.splice(handlers.indexOf(h), 1),
+  };
+  return { out, input, handlers, writes };
+}
+
+test("zlib is used only when the terminal answers OK to a compressed query", async () => {
+  const ok = zlibTerminal((id) => `\x1b_Gi=${id};OK\x1b\\`);
+  expect(await probeZlib(ok.out, ok.input, 200)).toBe(true);
+  expect(ok.writes.join("")).toContain("o=z");
+  expect(ok.handlers).toHaveLength(0);
+
+  const err = zlibTerminal((id) => `\x1b_Gi=${id};EINVAL:unsupported compression\x1b\\`);
+  expect(await probeZlib(err.out, err.input, 200)).toBe(false);
+  const silent = zlibTerminal(null); // herdr-core sin cliente no contesta las consultas de gráficos
+  expect(await probeZlib(silent.out, silent.input, 20)).toBe(false);
+  expect(silent.handlers).toHaveLength(0);
+
+  const other = zlibTerminal(() => "\x1b_Gi=7;OK\x1b\\"); // la respuesta de otra imagen no cuenta
+  expect(await probeZlib(other.out, other.input, 20)).toBe(false);
+});
+
+test("with zlib on, the frame goes compressed (o=z) and inflates back to the RGB pixels", () => {
+  const o = output();
+  const v = new KittyVideo(o.out);
+  v.zlib = true;
+  const rgba = new Uint8Array(8 * 4 * 4).map((_, i) => (i * 37) & 255);
+  v.show(rgba, 8, 4, BOX);
+  const w = o.writes[0]!;
+  expect(w).toMatch(/\x1b_Ga=t,f=24,o=z,s=8,v=4,/);
+  const b64 = [...w.matchAll(/\x1b_G[^;]*;([^\x1b]*)\x1b\\/g)].map((m) => m[1]).join("");
+  const rgb = inflateSync(Buffer.from(b64, "base64"));
+  expect([...rgb.subarray(0, 6)]).toEqual([0, 1, 2, 4, 5, 6].map((i) => rgba[i]!));
+  expect(rgb.length).toBe(8 * 4 * 3);
 });

@@ -164,6 +164,7 @@ test("without the file transport the stream frame never leaves the box without a
   expect(during.placements).toBeGreaterThanOrEqual(4); // los cuadros llegan a la pantalla
   expect(during.gaps).toBe(0);
   expect(during.maxStored).toBeLessThanOrEqual(2);
+  expect(term.writes.join("")).toMatch(/\x1b_Ga=t,f=24,o=z,/); // contestó OK a la consulta con zlib: van comprimidos
 
   setMounted(false); // dejar de ver: no tiene que quedar ninguna imagen en la terminal
   await h.renderOnce();

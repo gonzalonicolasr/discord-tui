@@ -7,7 +7,7 @@ import type { Store } from "../../store/store";
 import type { DecodedFrame } from "../../watch/decode";
 import type { FrameSubscription } from "../../watch/watch";
 import { displayName, truncate } from "../format";
-import { type CellBox, KittyVideo } from "../kitty-video";
+import { type CellBox, KittyVideo, probeZlib } from "../kitty-video";
 import { jsonEqual, useSelector } from "../store-bridge";
 import type { Theme } from "../theme";
 import { Button } from "./Button";
@@ -17,6 +17,9 @@ const CELL_W = 10;
 const CELL_H = 20;
 const MAX_W = 960;
 const MAX_H = 540;
+
+/** Renderers cuya terminal ya dijo que entiende zlib (`o=z`). Un "no" o el silencio se vuelven a preguntar al mirar otra vez. */
+const zlibTerminals = new WeakSet<object>();
 
 export function videoBox(cols: number, rows: number): { width: number; height: number } {
   return { width: Math.max(32, Math.min(MAX_W, cols * CELL_W)), height: Math.max(18, Math.min(MAX_H, rows * CELL_H)) };
@@ -85,7 +88,14 @@ export function StreamViewer(props: { store: Store; theme: Theme; voice: VoiceAc
     try {
       if (ownKitty()) {
         if (image.source) image.source = undefined;
-        video ??= new KittyVideo(renderer.nativeScene.driver);
+        if (!video) {
+          const v = (video = new KittyVideo(renderer.nativeScene.driver));
+          if (zlibTerminals.has(renderer)) v.zlib = true;
+          else
+            void probeZlib(renderer.nativeScene.driver, renderer).then((ok) => {
+              if (ok) (zlibTerminals.add(renderer), (v.zlib = true));
+            });
+        }
         frameSize = { width: frame.width, height: frame.height };
         if (!hasFrame()) return void setHasFrame(true); // la caja recién crece en la pintada siguiente
         video.show(frame.rgba, frame.width, frame.height, cellBox());
