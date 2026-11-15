@@ -33,6 +33,8 @@ export function spawnClean(
     stderr?: "pipe" | "ignore" | "inherit";
     /** Un pipe extra como fd 3 del hijo; el extremo nuestro queda en `proc.stdio[3]` (un fd). */
     fd3?: "pipe";
+    /** Igual, como fd 4 (`proc.stdio[4]`). Sin `fd3`, el hijo no tiene fd 3. */
+    fd4?: "pipe";
   },
 ): Subprocess {
   const stdin = opts?.stdin ?? "ignore";
@@ -40,6 +42,7 @@ export function spawnClean(
   // Por defecto los hijos no escriben en la terminal: un navegador abierto con xdg-open (o cualquier
   // otro) metía sus logs arriba de la TUI ("zygote boot message: Broken pipe").
   const stderr = opts?.stderr ?? "ignore";
+  if (opts?.fd4) return Bun.spawn(cmd, { env: cleanEnv(), stdio: [stdin, stdout, stderr, opts.fd3 ?? "ignore", "pipe"] });
   if (opts?.fd3) return Bun.spawn(cmd, { env: cleanEnv(), stdio: [stdin, stdout, stderr, "pipe"] });
   return Bun.spawn(cmd, { env: cleanEnv(), stdin, stdout, stderr });
 }

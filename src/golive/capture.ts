@@ -64,6 +64,8 @@ export interface SpawnOpts {
   stderr?: "pipe" | "ignore";
   /** Un pipe extra como fd 3 del hijo (la entrada de audio de ffmpeg). */
   fd3?: "pipe";
+  /** Un pipe extra como fd 4 del hijo (la entrada de video de ffmpeg con wf-recorder). */
+  fd4?: "pipe";
 }
 
 export type SpawnFn = (cmd: string[], opts: SpawnOpts) => ProcLike;
@@ -171,17 +173,27 @@ export function scaleFilter(quality: Quality): string {
   return `scale='min(${quality.width},iw)':'min(${quality.height},ih)':force_original_aspect_ratio=decrease:force_divisible_by=2`;
 }
 
+/** fd de ffmpeg por donde entra el audio de la PC (lo escribe pw-record). */
+export const AUDIO_FD = 3;
+/**
+ * fd de ffmpeg por donde entra el video crudo de wf-recorder (~93 MB/s en 1080p30). Va de proceso a proceso: si
+ * pasara por JS (stdin: capture.stdout), Bun lo copia en el hilo principal, el mismo que mezcla el audio de la
+ * llamada.
+ */
+export const VIDEO_FD = 4;
+
 /** Bitrate del Opus del audio de la PC (el mismo default que la librería). */
 export const AUDIO_BITRATE_K = 128;
 
 /**
- * Argumentos de ffmpeg: entrada por stdin, H264 de baja latencia, keyframe (IDR) cada 2 s, NUT por stdout.
+ * Argumentos de ffmpeg: entrada por el fd 4 (wf-recorder) o por stdin (grim), H264 de baja latencia, keyframe
+ * (IDR) cada 2 s, NUT por stdout.
  * Con `audio`: además PCM s16 48 kHz estéreo por el fd 3 (de pw-record) → Opus 48 kHz estéreo en el mismo NUT
  * (la librería solo acepta Opus como audio: LibavDemuxer allowedAudioCodec).
  */
 export function ffmpegArgs(opts: { backend: CaptureBackend; encoder: VideoEncoder; quality: Quality; audio?: boolean }): string[] {
   const { backend, encoder, quality } = opts;
-  const audioIn = opts.audio ? ["-f", "s16le", "-ar", "48000", "-ac", "2", "-i", "pipe:3"] : [];
+  const audioIn = opts.audio ? ["-f", "s16le", "-ar", "48000", "-ac", "2", "-i", `pipe:${AUDIO_FD}`] : [];
   const audioOut = opts.audio
     ? [
         "-c:a",
@@ -204,7 +216,7 @@ export function ffmpegArgs(opts: { backend: CaptureBackend; encoder: VideoEncode
   const gop = String(quality.fps * KEYFRAME_SECONDS);
   const input =
     backend === "wf-recorder"
-      ? ["-fflags", "nobuffer", "-flags", "low_delay", "-probesize", "32768", "-analyzeduration", "0", "-f", "nut", "-i", "pipe:0"]
+      ? ["-fflags", "nobuffer", "-flags", "low_delay", "-probesize", "32768", "-analyzeduration", "0", "-f", "nut", "-i", `pipe:${VIDEO_FD}`]
       : ["-f", "image2pipe", "-c:v", "ppm", "-framerate", String(GRIM_FPS), "-i", "pipe:0"];
   const filters = [scaleFilter(quality), `fps=${quality.fps}`, ...(encoder === "vaapi" ? ["format=nv12", "hwupload"] : ["format=yuv420p"])];
   const codec =
@@ -404,10 +416,10 @@ function audioProbation(opts: { firstOutput: Promise<void>; procs: ProcLike[]; g
 }
 
 /**
- * Arranca captura → ffmpeg. Con wf-recorder el stdout de la captura va directo al stdin de ffmpeg; con
- * grim se saca un frame por vez en JS (un proceso `grim` corto por frame) y se escribe en ffmpeg.
+ * Arranca captura → ffmpeg. Con wf-recorder, wf-recorder escribe directo en el fd 4 de ffmpeg (sin pasar por
+ * JS); con grim se saca un frame por vez en JS (un proceso `grim` corto por frame) y se escribe en su stdin.
  * Con `audio`, pw-record (ver desktop-audio.ts) escribe directo en el fd 3 de ffmpeg, sin pasar por JS. Si
- * pw-record no arranca, tira (y no deja nada vivo): el que llama reintenta sin audio.
+ * pw-record o wf-recorder no arrancan, tira (y no deja nada vivo): el que llama reintenta sin audio.
  */
 export function startCapture(opts: {
   backend: CaptureBackend;
@@ -442,13 +454,33 @@ export function startCapture(opts: {
   const ffArgs = ffmpegArgs(opts);
   const fd3 = audio ? { fd3: "pipe" as const } : {};
 
-  /** pw-record → fd 3 de ffmpeg. Si no se puede, mata lo que ya arrancó y tira. */
-  const attachAudio = (): void => {
-    if (!audio) return;
-    const fd = ffmpeg.stdio?.[3];
+  /** Nuestros extremos de los pipes extra de ffmpeg que todavía no se cerraron (cada uno se cierra una sola vez). */
+  const ours = new Set<number>();
+  const adoptFfmpegFds = (): void => {
+    for (const n of [AUDIO_FD, VIDEO_FD]) {
+      const fd = ffmpeg.stdio?.[n];
+      if (typeof fd === "number") ours.add(fd);
+    }
+  };
+  const release = (fd: number): void => {
+    if (!ours.delete(fd)) return;
     try {
-      if (typeof fd !== "number") throw new Error("ffmpeg sin fd 3");
-      recorder = track(env.spawn(desktopAudioCommand(), { stdin: "ignore", stdout: fd, stderr: "ignore" }));
+      closeSync(fd);
+    } catch {
+      // ya cerrado
+    }
+  };
+
+  /**
+   * Arranca `cmd` escribiendo directo en el fd `n` de ffmpeg. Después cierra nuestra copia de ese extremo: si
+   * quedara abierta, ffmpeg nunca vería el fin de esa entrada. Si no se puede, mata lo que ya arrancó, cierra
+   * los extremos que queden y tira.
+   */
+  const feed = (n: number, cmd: string[]): ProcLike => {
+    const fd = ffmpeg.stdio?.[n];
+    try {
+      if (typeof fd !== "number") throw new Error(`ffmpeg sin fd ${n}`);
+      return track(env.spawn(cmd, { stdin: "ignore", stdout: fd, stderr: "ignore" }));
     } catch (error) {
       stopping = true;
       for (const proc of procs) {
@@ -458,18 +490,18 @@ export function startCapture(opts: {
           // ya había salido
         }
       }
+      for (const other of [...ours]) release(other);
       throw error;
     } finally {
-      // Nuestra copia del extremo de escritura: si queda abierta, ffmpeg nunca ve el fin del audio.
-      if (typeof fd === "number") {
-        try {
-          closeSync(fd);
-        } catch {
-          // ya cerrado
-        }
-      }
+      if (typeof fd === "number") release(fd);
     }
-    const rec = recorder;
+  };
+
+  /** pw-record → fd 3 de ffmpeg. Si no se puede, mata lo que ya arrancó y tira. */
+  const attachAudio = (): void => {
+    if (!audio) return;
+    const rec = feed(AUDIO_FD, desktopAudioCommand());
+    recorder = rec;
     linker = startAudioLinker({ env, recorderPid: rec.pid });
     // Sin audio la librería frena el video esperándolo (lo sincroniza contra el audio): mejor cortar.
     void rec.exited.then(
@@ -487,12 +519,13 @@ export function startCapture(opts: {
   };
 
   if (opts.backend === "wf-recorder") {
-    capture = track(env.spawn(wfRecorderCommand(opts.monitor, opts.quality, { noDamage: audio }), { stdin: "ignore", stdout: "pipe", stderr: "ignore" }));
-    const piped = capture.stdout && typeof capture.stdout !== "number" ? capture.stdout : "ignore";
-    ffmpeg = track(env.spawn(ffArgs, { stdin: piped, stdout: "pipe", stderr: "pipe", ...fd3 }));
+    ffmpeg = track(env.spawn(ffArgs, { stdin: "ignore", stdout: "pipe", stderr: "pipe", ...fd3, fd4: "pipe" }));
+    adoptFfmpegFds();
+    capture = feed(VIDEO_FD, wfRecorderCommand(opts.monitor, opts.quality, { noDamage: audio }));
     attachAudio();
   } else {
     ffmpeg = track(env.spawn(ffArgs, { stdin: "pipe", stdout: "pipe", stderr: "pipe", ...fd3 }));
+    adoptFfmpegFds();
     attachAudio();
     const sink = ffmpeg.stdin && typeof ffmpeg.stdin !== "number" ? ffmpeg.stdin : null;
     loop = (async () => {

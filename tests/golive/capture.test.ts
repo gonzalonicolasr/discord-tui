@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { fstatSync, readlinkSync } from "node:fs";
 import { Readable } from "node:stream";
 
 import {
@@ -82,7 +83,8 @@ describe("commands", () => {
     const args = ffmpegArgs({ backend: "wf-recorder", encoder: "x264", quality: QUALITY["720p30"] });
     expect(args[0]).toBe("ffmpeg");
     expect(flag(args, "-f")).toBe("nut");
-    expect(flag(args, "-i")).toBe("pipe:0");
+    // el video crudo de wf-recorder entra por el fd 4 (de proceso a proceso, sin pasar por JS)
+    expect(flag(args, "-i")).toBe("pipe:4");
     expect(flag(args, "-vf")).toBe("scale='min(1280,iw)':'min(720,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2,fps=30,format=yuv420p");
     expect(flag(args, "-c:v")).toBe("libx264");
     expect(flag(args, "-tune")).toBe("zerolatency");
@@ -122,7 +124,7 @@ describe("commands", () => {
   test("ffmpeg with the PC audio: raw s16 48 kHz stereo from fd 3, Opus 48 kHz stereo in the same NUT, no -an", () => {
     const args = ffmpegArgs({ backend: "wf-recorder", encoder: "nvenc", quality: QUALITY["720p30"], audio: true });
     const inputs = args.flatMap((a, i) => (a === "-i" ? [args[i + 1]] : []));
-    expect(inputs).toEqual(["pipe:0", "pipe:3"]);
+    expect(inputs).toEqual(["pipe:4", "pipe:3"]);
     const audioIn = args.indexOf("pipe:3");
     expect(args.slice(audioIn - 7, audioIn + 1)).toEqual(["-f", "s16le", "-ar", "48000", "-ac", "2", "-i", "pipe:3"]);
     expect(args).not.toContain("-an");
@@ -156,6 +158,9 @@ describe("commands", () => {
     expect(flag(args, "-c:v")).toBe("ppm");
     expect(flag(args, "-framerate")).toBe("10");
     expect(flag(args, "-vf")).toContain("fps=30");
+    // grim: los frames los escribe JS por stdin
+    expect(flag(args, "-i")).toBe("pipe:0");
+    expect(ffmpegArgs({ backend: "grim", encoder: "x264", quality: QUALITY["720p30"], audio: true }).flatMap((a, i, all) => (a === "-i" ? [all[i + 1]] : []))).toEqual(["pipe:0", "pipe:3"]);
   });
 });
 
@@ -237,10 +242,29 @@ describe("process cleanup (real processes standing in for wf-recorder / grim / f
     return { env, spawned };
   }
 
+  /** Un "ffmpeg" que pasa a su stdout lo que le llega por el fd 4 (por donde entra el video de wf-recorder). */
+  const FFMPEG_FD4 = ["sh", "-c", "exec cat <&4"];
+
+  /** Los fds abiertos de cada stand-in, de las líneas de `ls -l /proc/$$/fd` que van después de su marca. */
+  function fdsByMarker(text: string): Record<string, number[]> {
+    const out: Record<string, number[]> = {};
+    let current = "";
+    for (const line of text.split("\n")) {
+      const marker = /^== (\w+)$/.exec(line);
+      if (marker) current = marker[1]!;
+      const fd = / (\d+) -> /.exec(line);
+      if (fd && current) (out[current] ??= []).push(Number(fd[1]));
+    }
+    return out;
+  }
+
+  /** `ls -l` de los fds del shell; el `; true` evita que sh haga exec de ls (si no, se listaría ls a sí mismo). */
+  const listFds = (marker: string) => `echo "== ${marker}"; ls -l /proc/$$/fd; true`;
+
   test("wf-recorder → ffmpeg: stop kills both, nothing left alive", async () => {
-    const { env, spawned } = standIns((cmd) => (cmd[0] === "wf-recorder" ? ["sh", "-c", "exec sleep 30"] : ["cat"]));
+    const { env, spawned } = standIns((cmd) => (cmd[0] === "wf-recorder" ? ["sh", "-c", "exec sleep 30"] : FFMPEG_FD4));
     const handle = startCapture({ backend: "wf-recorder", encoder: "x264", monitor: "DP-1", quality: QUALITY["720p30"], env });
-    expect(spawned.map((s) => s.cmd[0])).toEqual(["wf-recorder", "ffmpeg"]);
+    expect(spawned.map((s) => s.cmd[0])).toEqual(["ffmpeg", "wf-recorder"]);
     expect(handle.pids().length).toBe(2);
     await Bun.sleep(50);
     expect(spawned.every((s) => alive(s.pid))).toBe(true);
@@ -263,8 +287,89 @@ describe("process cleanup (real processes standing in for wf-recorder / grim / f
     expect(spawned.filter((s) => alive(s.pid))).toEqual([]);
   });
 
+  test("wf-recorder writes straight into ffmpeg's fd 4: the raw video never goes through JS", async () => {
+    const opts: Record<string, SpawnOpts> = {};
+    const { env } = standIns((cmd) => (cmd[0] === "wf-recorder" ? ["head", "-c", "3000000", "/dev/zero"] : ["sh", "-c", "exec wc -c <&4"]));
+    const spawn = env.spawn;
+    env.spawn = (cmd, o) => {
+      opts[cmd[0]!] = o;
+      return spawn(cmd, o);
+    };
+    const handle = startCapture({ backend: "wf-recorder", encoder: "x264", monitor: "", quality: QUALITY["720p30"], env });
+    expect(opts.ffmpeg!.stdin).toBe("ignore");
+    expect(opts.ffmpeg!.fd4).toBe("pipe");
+    expect(typeof opts["wf-recorder"]!.stdout).toBe("number");
+    let text = "";
+    handle.output.on("data", (chunk: Buffer) => (text += chunk.toString()));
+    // wf-recorder termina → ffmpeg ve el fin (nadie más tiene abierto el extremo de escritura) → `ended`
+    const ended = await Promise.race([handle.ended.then(() => "ended"), Bun.sleep(3000).then(() => "timeout")]);
+    expect(ended).toBe("ended");
+    await Bun.sleep(20);
+    expect(text.trim()).toBe("3000000");
+    await handle.stop();
+  });
+
+  test("no stray fds: wf-recorder has only 0-2, ffmpeg 0-2 + 4 (+ 3 with audio), pw-record 0-2; ours get closed", async () => {
+    for (const audio of [false, true]) {
+      const passed: Array<{ fd: number; link: string }> = [];
+      const { env, spawned } = standIns((cmd) => {
+        if (cmd[0] === "wf-recorder") return ["sh", "-c", listFds("wf")];
+        if (cmd[0] === "pw-record") return ["sh", "-c", `${listFds("pw")}; exec sleep 30`];
+        if (cmd[0] === "pw-dump") return ["echo", "[]"];
+        if (cmd[0] === "pw-link") return ["true"];
+        // "ffmpeg": sus fds, lo que mandó wf-recorder por el fd 4 y (con audio) lo de pw-record por el fd 3
+        return ["sh", "-c", `${listFds("ff")}; cat <&4; ${audio ? "exec cat <&3" : "exec sleep 30"}`];
+      });
+      const spawn = env.spawn;
+      env.spawn = (cmd, o) => {
+        if (typeof o.stdout === "number") passed.push({ fd: o.stdout, link: readlinkSync(`/proc/self/fd/${o.stdout}`) });
+        return spawn(cmd, o);
+      };
+      const handle = startCapture({ backend: "wf-recorder", encoder: "x264", monitor: "", quality: QUALITY["720p30"], env, audio, audioGraceMs: 50 });
+      // nuestra copia de cada extremo que se le pasó a un hijo ya está cerrada (el fd no existe o es otro)
+      expect(passed.length).toBe(audio ? 2 : 1);
+      for (const { fd, link } of passed) {
+        let now: string | null = null;
+        try {
+          now = readlinkSync(`/proc/self/fd/${fd}`);
+        } catch {
+          // cerrado
+        }
+        expect(now).not.toBe(link);
+      }
+      let text = "";
+      handle.output.on("data", (chunk: Buffer) => (text += chunk.toString()));
+      const want = audio ? ["ff", "wf", "pw"] : ["ff", "wf"];
+      for (let i = 0; i < 100 && Object.keys(fdsByMarker(text)).length < want.length; i++) await Bun.sleep(20);
+      const fds = fdsByMarker(text);
+      expect(fds.ff).toEqual(audio ? [0, 1, 2, 3, 4] : [0, 1, 2, 4]);
+      expect(fds.wf).toEqual([0, 1, 2]);
+      if (audio) expect(fds.pw).toEqual([0, 1, 2]);
+      await handle.stop();
+      expect(spawned.filter((s) => alive(s.pid))).toEqual([]);
+    }
+  });
+
+  test("if wf-recorder cannot start, startCapture throws and leaves nothing alive (and no fd of ours open)", async () => {
+    for (const audio of [false, true]) {
+      const { env, spawned } = standIns((cmd) => (cmd[0] === "pw-dump" ? ["echo", "[]"] : ["sh", "-c", "exec sleep 30"]));
+      const spawn = env.spawn;
+      const passed: number[] = [];
+      env.spawn = (cmd, o) => {
+        if (typeof o.stdout === "number") passed.push(o.stdout);
+        if (cmd[0] === "wf-recorder") throw new Error("no arranca");
+        return spawn(cmd, o);
+      };
+      expect(() => startCapture({ backend: "wf-recorder", encoder: "x264", monitor: "", quality: QUALITY["720p30"], env, audio })).toThrow("no arranca");
+      expect(spawned.length).toBeGreaterThan(0);
+      for (const fd of passed) expect(() => fstatSync(fd)).toThrow();
+      await Bun.sleep(50);
+      expect(spawned.filter((s) => alive(s.pid))).toEqual([]);
+    }
+  });
+
   test("a capture that dies on its own resolves `ended`", async () => {
-    const { env } = standIns((cmd) => (cmd[0] === "wf-recorder" ? ["true"] : ["cat"]));
+    const { env } = standIns((cmd) => (cmd[0] === "wf-recorder" ? ["true"] : FFMPEG_FD4));
     const handle = startCapture({ backend: "wf-recorder", encoder: "x264", monitor: "", quality: QUALITY["720p30"], env });
     const ended = await Promise.race([handle.ended.then(() => "ended"), Bun.sleep(3000).then(() => "timeout")]);
     expect(ended).toBe("ended");
@@ -279,7 +384,7 @@ describe("process cleanup (real processes standing in for wf-recorder / grim / f
       if (cmd[0] === "pw-record") return recorder;
       if (cmd[0] === "pw-dump") return ["echo", "[]"];
       if (cmd[0] === "pw-link") return ["true"];
-      return ["cat"];
+      return FFMPEG_FD4;
     });
     const spawn = env.spawn;
     env.spawn = (cmd, o) => {
@@ -289,15 +394,17 @@ describe("process cleanup (real processes standing in for wf-recorder / grim / f
     return { env, spawned, opts };
   }
 
-  test("with the PC audio: wf-recorder (-D) → ffmpeg ← pw-record on fd 3; stop kills all three", async () => {
+  test("with the PC audio: wf-recorder (-D) → ffmpeg fd 4, pw-record → ffmpeg fd 3; stop kills all three", async () => {
     const { env, spawned, opts } = audioStandIns(["sh", "-c", "exec sleep 30"]);
     const handle = startCapture({ backend: "wf-recorder", encoder: "x264", monitor: "DP-1", quality: QUALITY["720p30"], env, audio: true });
-    expect(spawned.map((s) => s.cmd[0]).slice(0, 3)).toEqual(["wf-recorder", "ffmpeg", "pw-record"]);
-    expect(spawned[0]!.cmd).toContain("-D");
-    expect(spawned[1]!.cmd).toContain("pipe:3");
+    expect(spawned.map((s) => s.cmd[0]).slice(0, 3)).toEqual(["ffmpeg", "wf-recorder", "pw-record"]);
+    expect(spawned[1]!.cmd).toContain("-D");
+    expect(spawned[0]!.cmd).toContain("pipe:3");
     expect(opts.ffmpeg!.fd3).toBe("pipe");
+    expect(opts.ffmpeg!.fd4).toBe("pipe");
+    expect(typeof opts["wf-recorder"]!.stdout).toBe("number");
     expect(typeof opts["pw-record"]!.stdout).toBe("number");
-    expect(spawned[2]!.cmd).toEqual(["pw-record", ...spawned[2]!.cmd.slice(1)]);
+    expect(opts["wf-recorder"]!.stdout).not.toBe(opts["pw-record"]!.stdout);
     await Bun.sleep(80);
     expect(spawned.filter((s) => ["wf-recorder", "ffmpeg", "pw-record"].includes(s.cmd[0]!)).every((s) => alive(s.pid))).toBe(true);
     expect(spawned.some((s) => s.cmd[0] === "pw-dump")).toBe(true);
@@ -365,8 +472,9 @@ describe("process cleanup (real processes standing in for wf-recorder / grim / f
     const { env, spawned, opts } = audioStandIns(["sh", "-c", "exec sleep 30"]);
     const handle = startCapture({ backend: "wf-recorder", encoder: "x264", monitor: "", quality: QUALITY["720p30"], env });
     await Bun.sleep(30);
-    expect(spawned.map((s) => s.cmd[0])).toEqual(["wf-recorder", "ffmpeg"]);
+    expect(spawned.map((s) => s.cmd[0])).toEqual(["ffmpeg", "wf-recorder"]);
     expect(opts.ffmpeg!.fd3).toBeUndefined();
+    expect(opts.ffmpeg!.fd4).toBe("pipe");
     await handle.stop();
   });
 
@@ -377,22 +485,27 @@ describe("process cleanup (real processes standing in for wf-recorder / grim / f
 
 // Con el ffmpeg real del sistema y una fuente SINTÉTICA (lavfi, nada de pantalla): los keyframes caen cada 2 s.
 const ffmpegReady = Bun.which("ffmpeg") !== null && Bun.which("ffprobe") !== null;
+// La fuente hace de wf-recorder (escribe en el fd 4 de ffmpeg, como en la captura de verdad).
 test.skipIf(!ffmpegReady)("real ffmpeg with our args emits an IDR keyframe every 2 s", async () => {
-  const source = Bun.spawn(
-    ["ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30", "-t", "5", "-c:v", "rawvideo", "-pix_fmt", "yuv420p", "-f", "nut", "pipe:1"],
-    { stdout: "pipe", stderr: "ignore", env: {} },
-  );
-  const encode = defaultCaptureEnv.spawn(ffmpegArgs({ backend: "wf-recorder", encoder: "x264", quality: QUALITY["720p30"] }), {
-    stdin: source.stdout as ReadableStream<Uint8Array>,
-    stdout: "pipe",
-    stderr: "ignore",
-  });
+  const env: CaptureEnv = {
+    which: () => true,
+    exists: () => false,
+    spawn: (cmd, opts) =>
+      defaultCaptureEnv.spawn(
+        cmd[0] === "wf-recorder"
+          ? ["ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30", "-t", "5", "-c:v", "rawvideo", "-pix_fmt", "yuv420p", "-f", "nut", "pipe:1"]
+          : cmd,
+        opts,
+      ),
+  };
+  const handle = startCapture({ backend: "wf-recorder", encoder: "x264", monitor: "", quality: QUALITY["720p30"], env });
   const probe = defaultCaptureEnv.spawn(
     ["ffprobe", "-v", "error", "-f", "nut", "-i", "pipe:0", "-select_streams", "v", "-show_entries", "packet=pts_time,flags", "-of", "csv=p=0"],
-    { stdin: encode.stdout as ReadableStream<Uint8Array>, stdout: "pipe", stderr: "ignore" },
+    { stdin: Readable.toWeb(handle.output) as unknown as ReadableStream<Uint8Array>, stdout: "pipe", stderr: "ignore" },
   );
   const csv = await new Response(probe.stdout as ReadableStream).text();
-  await Promise.all([source.exited, encode.exited, probe.exited]);
+  await probe.exited;
+  await handle.stop();
   const keyTimes = csv
     .trim()
     .split("\n")
