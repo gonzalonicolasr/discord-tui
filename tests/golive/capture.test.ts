@@ -313,7 +313,8 @@ describe("process cleanup (real processes standing in for wf-recorder / grim / f
     for (const audio of [false, true]) {
       const passed: Array<{ fd: number; link: string }> = [];
       const { env, spawned } = standIns((cmd) => {
-        if (cmd[0] === "wf-recorder") return ["sh", "-c", listFds("wf")];
+        // sigue vivo pero suelta su stdout: ffmpeg ve el fin del video (si saliera, con audio se cortaría todo)
+        if (cmd[0] === "wf-recorder") return ["sh", "-c", `${listFds("wf")}; exec sleep 30 >&-`];
         if (cmd[0] === "pw-record") return ["sh", "-c", `${listFds("pw")}; exec sleep 30`];
         if (cmd[0] === "pw-dump") return ["echo", "[]"];
         if (cmd[0] === "pw-link") return ["true"];
@@ -428,6 +429,45 @@ describe("process cleanup (real processes standing in for wf-recorder / grim / f
   });
 
   const PRINTS = ["sh", "-c", "printf hola; exec sleep 30"];
+  /**
+   * Un "ffmpeg" con audio como el de verdad: saca un dato, lee el video del fd 4 hasta el fin y después sigue
+   * esperando el audio del fd 3 (no termina solo cuando se corta el video).
+   */
+  const FFMPEG_WAITS_AUDIO = ["sh", "-c", "printf x; cat <&4 >/dev/null; exec cat <&3"];
+
+  test("with audio, a wf-recorder that dies mid-stream cuts ffmpeg and pw-record: `ended` resolves, nothing left alive", async () => {
+    const { env, spawned } = standIns((cmd) => {
+      if (cmd[0] === "wf-recorder") return ["sh", "-c", "exec sleep 0.4"];
+      if (cmd[0] === "pw-record") return ["sh", "-c", "exec sleep 30"];
+      if (cmd[0] === "pw-dump") return ["echo", "[]"];
+      if (cmd[0] === "pw-link") return ["true"];
+      return FFMPEG_WAITS_AUDIO;
+    });
+    const handle = startCapture({ backend: "wf-recorder", encoder: "x264", monitor: "", quality: QUALITY["720p30"], env, audio: true, audioGraceMs: 50, audioTimeoutMs: 2_000 });
+    expect(await handle.audioReady).toBe(true);
+    const ended = await Promise.race([handle.ended.then(() => "ended"), Bun.sleep(3000).then(() => "timeout")]);
+    expect(ended).toBe("ended");
+    await Bun.sleep(50);
+    // sin llamar a stop(): ninguno quedó vivo
+    expect(spawned.filter((s) => ["wf-recorder", "ffmpeg", "pw-record"].includes(s.cmd[0]!) && alive(s.pid))).toEqual([]);
+    await handle.stop();
+  });
+
+  test("with audio, a wf-recorder that dies during the audio probation makes audioReady false right away", async () => {
+    const { env } = standIns((cmd) => {
+      if (cmd[0] === "wf-recorder") return ["sh", "-c", "exec sleep 0.05"];
+      if (cmd[0] === "pw-record") return ["sh", "-c", "exec sleep 30"];
+      if (cmd[0] === "pw-dump") return ["echo", "[]"];
+      if (cmd[0] === "pw-link") return ["true"];
+      return FFMPEG_WAITS_AUDIO;
+    });
+    const t0 = performance.now();
+    const handle = startCapture({ backend: "wf-recorder", encoder: "x264", monitor: "", quality: QUALITY["720p30"], env, audio: true, audioGraceMs: 1_500, audioTimeoutMs: 4_000 });
+    expect(await handle.audioReady).toBe(false);
+    expect(performance.now() - t0).toBeLessThan(1_000);
+    await handle.stop();
+  });
+
 
   test("audioReady: true once ffmpeg has output and pw-record lived through the grace period; the bytes still reach the output", async () => {
     const { env } = audioStandIns(["sh", "-c", "exec sleep 30"], PRINTS);
@@ -552,4 +592,45 @@ test.skipIf(!ffmpegReady)("real ffmpeg with audio on fd 3 muxes H264 + Opus with
   expect(packets.some((p) => p.stream_index === opus.index)).toBe(true);
   expect(packets.some((p) => p.stream_index !== opus.index)).toBe(true);
   expect(packets.every((p) => p.pts >= 0)).toBe(true);
+}, 20_000);
+
+// Con el ffmpeg real y fuentes SINTÉTICAS: la "captura" dura 1,5 s y el "audio" es silencio sin fin. Con audio,
+// ffmpeg no termina solo al cortarse el video (sigue esperando el audio): hay que cortarlo para que `ended` llegue.
+test.skipIf(!ffmpegReady)("real ffmpeg with audio: when the capture stops on its own, `ended` resolves and nothing is left alive", async () => {
+  const alive = (pid: number): boolean => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const spawned: Array<{ name: string; pid: number }> = [];
+  const env: CaptureEnv = {
+    which: () => true,
+    exists: () => false,
+    spawn: (cmd, opts) => {
+      const real =
+        cmd[0] === "wf-recorder"
+          ? ["ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-re", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30", "-t", "1.5", "-c:v", "rawvideo", "-pix_fmt", "yuv420p", "-f", "nut", "pipe:1"]
+          : cmd[0] === "pw-record"
+            ? ["ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-re", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-f", "s16le", "pipe:1"]
+            : cmd[0] === "pw-dump"
+              ? ["echo", "[]"]
+              : cmd[0] === "pw-link"
+                ? ["true"]
+                : cmd;
+      const proc = defaultCaptureEnv.spawn(real, opts);
+      spawned.push({ name: cmd[0]!, pid: proc.pid });
+      return proc;
+    },
+  };
+  const handle = startCapture({ backend: "wf-recorder", encoder: "x264", monitor: "", quality: QUALITY["720p30"], env, audio: true, audioGraceMs: 50 });
+  handle.output.resume();
+  expect(await handle.audioReady).toBe(true);
+  const ended = await Promise.race([handle.ended.then(() => "ended"), Bun.sleep(8_000).then(() => "timeout")]);
+  expect(ended).toBe("ended");
+  await Bun.sleep(100);
+  expect(spawned.filter((s) => ["wf-recorder", "ffmpeg", "pw-record"].includes(s.name) && alive(s.pid))).toEqual([]);
+  await handle.stop();
 }, 20_000);

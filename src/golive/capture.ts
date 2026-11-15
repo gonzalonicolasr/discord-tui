@@ -453,6 +453,8 @@ export function startCapture(opts: {
   const audio = opts.audio === true;
   const ffArgs = ffmpegArgs(opts);
   const fd3 = audio ? { fd3: "pipe" as const } : {};
+  /** Se cortó la captura de video (wf-recorder salió solo): lo que muera después no es un corte del audio. */
+  let videoEnded = false;
 
   /** Nuestros extremos de los pipes extra de ffmpeg que todavía no se cerraron (cada uno se cierra una sola vez). */
   const ours = new Set<number>();
@@ -506,7 +508,7 @@ export function startCapture(opts: {
     // Sin audio la librería frena el video esperándolo (lo sincroniza contra el audio): mejor cortar.
     void rec.exited.then(
       (code) => {
-        if (stopping) return;
+        if (stopping || videoEnded) return;
         log.warn("golive.audio-ended", { close_code: code });
         try {
           ffmpeg.kill("SIGTERM");
@@ -521,8 +523,28 @@ export function startCapture(opts: {
   if (opts.backend === "wf-recorder") {
     ffmpeg = track(env.spawn(ffArgs, { stdin: "ignore", stdout: "pipe", stderr: "pipe", ...fd3, fd4: "pipe" }));
     adoptFfmpegFds();
-    capture = feed(VIDEO_FD, wfRecorderCommand(opts.monitor, opts.quality, { noDamage: audio }));
+    const video = feed(VIDEO_FD, wfRecorderCommand(opts.monitor, opts.quality, { noDamage: audio }));
+    capture = video;
     attachAudio();
+    // Sin audio, ffmpeg ve el fin del video y termina solo. Con audio no: se queda esperando el audio y la
+    // transmisión queda congelada (`ended` no llega nunca). Se corta a mano.
+    if (audio) {
+      void video.exited.then(
+        (code) => {
+          if (stopping) return;
+          videoEnded = true;
+          log.warn("golive.video-ended", { close_code: code });
+          for (const proc of [ffmpeg, recorder]) {
+            try {
+              proc?.kill("SIGTERM");
+            } catch {
+              // ya había salido
+            }
+          }
+        },
+        () => {},
+      );
+    }
   } else {
     ffmpeg = track(env.spawn(ffArgs, { stdin: "pipe", stdout: "pipe", stderr: "pipe", ...fd3 }));
     adoptFfmpegFds();
@@ -577,7 +599,7 @@ export function startCapture(opts: {
   const audioReady = audio && recorder
     ? audioProbation({
         firstOutput,
-        procs: [recorder, ffmpeg],
+        procs: capture ? [recorder, ffmpeg, capture] : [recorder, ffmpeg],
         graceMs: opts.audioGraceMs ?? AUDIO_GRACE_MS,
         timeoutMs: opts.audioTimeoutMs ?? AUDIO_TIMEOUT_MS,
       })
