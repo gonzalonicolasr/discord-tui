@@ -113,6 +113,42 @@ describe("commands", () => {
     expect(flag(args, "-b:v")).toBe("4500k");
   });
 
+  test("wf-recorder with the PC audio records every frame (-D): a still screen must not stall the audio", () => {
+    expect(wfRecorderCommand("DP-1", QUALITY["720p30"], { noDamage: true })).toEqual(["wf-recorder", "-y", "-o", "DP-1", "-D", "-c", "rawvideo", "-m", "nut", "-x", "yuv420p", "-r", "30", "-f", "pipe:1"]);
+    expect(wfRecorderCommand("DP-1", QUALITY["720p30"])).not.toContain("-D");
+  });
+
+  test("ffmpeg with the PC audio: raw s16 48 kHz stereo from fd 3, Opus 48 kHz stereo in the same NUT, no -an", () => {
+    const args = ffmpegArgs({ backend: "wf-recorder", encoder: "nvenc", quality: QUALITY["720p30"], audio: true });
+    const inputs = args.flatMap((a, i) => (a === "-i" ? [args[i + 1]] : []));
+    expect(inputs).toEqual(["pipe:0", "pipe:3"]);
+    const audioIn = args.indexOf("pipe:3");
+    expect(args.slice(audioIn - 7, audioIn + 1)).toEqual(["-f", "s16le", "-ar", "48000", "-ac", "2", "-i", "pipe:3"]);
+    expect(args).not.toContain("-an");
+    expect(args.join(" ")).toContain("-map 0:v:0 -map 1:a:0");
+    expect(flag(args, "-c:a")).toBe("libopus");
+    expect(flag(args, "-b:a")).toBe("128k");
+    expect(flag(args, "-ar")).toBe("48000");
+    expect(args.lastIndexOf("-ar")).toBeGreaterThan(audioIn);
+    expect(args[args.lastIndexOf("-ac") + 1]).toBe("2");
+    // El Opus arranca con pts negativo (pre-skip) y el muxer NUT lo rechaza: se corre a 0.
+    expect(flag(args, "-bsf:a")).toBe("setts=ts=TS-STARTPTS");
+    // Que el muxer no retenga el audio esperando video (por defecto hasta 10 s).
+    expect(flag(args, "-max_interleave_delta")).toBe("50000");
+    // el video sigue igual
+    expect(flag(args, "-c:v")).toBe("h264_nvenc");
+    expect(args.at(-1)).toBe("pipe:1");
+    expect(args.at(-2)).toBe("nut");
+  });
+
+  test("ffmpeg without audio stays video only, as before", () => {
+    const args = ffmpegArgs({ backend: "wf-recorder", encoder: "x264", quality: QUALITY["720p30"], audio: false });
+    expect(args).toEqual(ffmpegArgs({ backend: "wf-recorder", encoder: "x264", quality: QUALITY["720p30"] }));
+    expect(args).toContain("-an");
+    expect(args).not.toContain("pipe:3");
+    expect(args).not.toContain("-c:a");
+  });
+
   test("grim input is a PPM image pipe at ~10 fps, output still 30 fps", () => {
     const args = ffmpegArgs({ backend: "grim", encoder: "x264", quality: QUALITY["720p30"] });
     expect(flag(args, "-f")).toBe("image2pipe");
@@ -231,6 +267,64 @@ describe("process cleanup (real processes standing in for wf-recorder / grim / f
     const handle = startCapture({ backend: "wf-recorder", encoder: "x264", monitor: "", quality: QUALITY["720p30"], env });
     const ended = await Promise.race([handle.ended.then(() => "ended"), Bun.sleep(3000).then(() => "timeout")]);
     expect(ended).toBe("ended");
+    await handle.stop();
+  });
+
+  /** Stand-ins con audio: nada graba pantalla ni audio (sleep/cat/true/echo). */
+  function audioStandIns(recorder: string[]) {
+    const opts: Record<string, SpawnOpts> = {};
+    const { env, spawned } = standIns((cmd) => {
+      if (cmd[0] === "wf-recorder") return ["sh", "-c", "exec sleep 30"];
+      if (cmd[0] === "pw-record") return recorder;
+      if (cmd[0] === "pw-dump") return ["echo", "[]"];
+      if (cmd[0] === "pw-link") return ["true"];
+      return ["cat"];
+    });
+    const spawn = env.spawn;
+    env.spawn = (cmd, o) => {
+      opts[cmd[0]!] = o;
+      return spawn(cmd, o);
+    };
+    return { env, spawned, opts };
+  }
+
+  test("with the PC audio: wf-recorder (-D) → ffmpeg ← pw-record on fd 3; stop kills all three", async () => {
+    const { env, spawned, opts } = audioStandIns(["sh", "-c", "exec sleep 30"]);
+    const handle = startCapture({ backend: "wf-recorder", encoder: "x264", monitor: "DP-1", quality: QUALITY["720p30"], env, audio: true });
+    expect(spawned.map((s) => s.cmd[0]).slice(0, 3)).toEqual(["wf-recorder", "ffmpeg", "pw-record"]);
+    expect(spawned[0]!.cmd).toContain("-D");
+    expect(spawned[1]!.cmd).toContain("pipe:3");
+    expect(opts.ffmpeg!.fd3).toBe("pipe");
+    expect(typeof opts["pw-record"]!.stdout).toBe("number");
+    expect(spawned[2]!.cmd).toEqual(["pw-record", ...spawned[2]!.cmd.slice(1)]);
+    await Bun.sleep(80);
+    expect(spawned.filter((s) => ["wf-recorder", "ffmpeg", "pw-record"].includes(s.cmd[0]!)).every((s) => alive(s.pid))).toBe(true);
+    expect(spawned.some((s) => s.cmd[0] === "pw-dump")).toBe(true);
+    await handle.stop();
+    await handle.stop();
+    await Bun.sleep(20);
+    expect(spawned.filter((s) => alive(s.pid))).toEqual([]);
+    const after = spawned.length;
+    await Bun.sleep(1_200);
+    expect(spawned.length).toBe(after); // el enlazador también paró
+  });
+
+  test("if pw-record dies mid-stream the capture ends (a stuck audio clock would freeze the video)", async () => {
+    const { env, spawned } = audioStandIns(["true"]);
+    const handle = startCapture({ backend: "wf-recorder", encoder: "x264", monitor: "", quality: QUALITY["720p30"], env, audio: true });
+    const ended = await Promise.race([handle.ended.then(() => "ended"), Bun.sleep(3000).then(() => "timeout")]);
+    expect(ended).toBe("ended");
+    await handle.stop();
+    await Bun.sleep(20);
+    expect(spawned.filter((s) => alive(s.pid))).toEqual([]);
+  });
+
+  test("without audio nothing PipeWire is spawned and ffmpeg gets no fd 3", async () => {
+    const { env, spawned, opts } = audioStandIns(["sh", "-c", "exec sleep 30"]);
+    const handle = startCapture({ backend: "wf-recorder", encoder: "x264", monitor: "", quality: QUALITY["720p30"], env });
+    await Bun.sleep(30);
+    expect(spawned.map((s) => s.cmd[0])).toEqual(["wf-recorder", "ffmpeg"]);
+    expect(opts.ffmpeg!.fd3).toBeUndefined();
     await handle.stop();
   });
 

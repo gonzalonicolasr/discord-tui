@@ -6,12 +6,13 @@
  * corren con env limpio (`spawnClean`) y sin el token. `stop()` los mata a todos (SIGTERM y, si no
  * salen, SIGKILL): no quedan procesos huérfanos.
  */
-import { existsSync } from "node:fs";
+import { closeSync, existsSync } from "node:fs";
 import { Readable } from "node:stream";
 
 import { log } from "../log/logger";
 import { spawnClean } from "../proc/spawn";
 import type { StreamQuality } from "../settings/settings";
+import { desktopAudioCommand, startAudioLinker, type AudioLinker } from "./desktop-audio";
 
 export type CaptureBackend = "wf-recorder" | "grim";
 export type VideoEncoder = "nvenc" | "vaapi" | "x264";
@@ -51,13 +52,18 @@ export interface ProcLike {
   readonly stderr?: ReadableStream<Uint8Array> | number | null | undefined;
   readonly exited: Promise<number>;
   readonly exitCode?: number | null;
+  /** Con `fd3: "pipe"`, `stdio[3]` es nuestro extremo (un fd) de ese pipe. */
+  readonly stdio?: ReadonlyArray<unknown>;
   kill(signal?: number | NodeJS.Signals): void;
 }
 
 export interface SpawnOpts {
   stdin?: "pipe" | "ignore" | ReadableStream<Uint8Array>;
-  stdout?: "pipe" | "ignore";
+  /** Un número: un fd abierto donde el hijo escribe directo (pw-record → fd 3 de ffmpeg). */
+  stdout?: "pipe" | "ignore" | number;
   stderr?: "pipe" | "ignore";
+  /** Un pipe extra como fd 3 del hijo (la entrada de audio de ffmpeg). */
+  fd3?: "pipe";
 }
 
 export type SpawnFn = (cmd: string[], opts: SpawnOpts) => ProcLike;
@@ -127,12 +133,18 @@ export async function listMonitors(env: CaptureEnv = defaultCaptureEnv, timeoutM
   }
 }
 
-/** Comando de wf-recorder: wlr-screencopy sin portal, video crudo yuv420p a 30 fps, NUT por stdout. */
-export function wfRecorderCommand(monitor: string, quality: Pick<Quality, "fps">): string[] {
+/**
+ * Comando de wf-recorder: wlr-screencopy sin portal, video crudo yuv420p a 30 fps, NUT por stdout.
+ * `noDamage` (con el audio de la PC): un frame cada 1/30 s aunque la pantalla no cambie. Sin eso, con la
+ * pantalla quieta no sale ningún frame (medido 2026-11-15) y ffmpeg frena el audio hasta que llegue video (su
+ * planificador no deja que una entrada se adelante más de 100 ms a la otra).
+ */
+export function wfRecorderCommand(monitor: string, quality: Pick<Quality, "fps">, opts: { noDamage?: boolean } = {}): string[] {
   return [
     "wf-recorder",
     "-y",
     ...(monitor ? ["-o", monitor] : []),
+    ...(opts.noDamage ? ["-D"] : []),
     "-c",
     "rawvideo",
     "-m",
@@ -159,9 +171,36 @@ export function scaleFilter(quality: Quality): string {
   return `scale='min(${quality.width},iw)':'min(${quality.height},ih)':force_original_aspect_ratio=decrease:force_divisible_by=2`;
 }
 
-/** Argumentos de ffmpeg: entrada por stdin, H264 de baja latencia, keyframe (IDR) cada 2 s, NUT por stdout. */
-export function ffmpegArgs(opts: { backend: CaptureBackend; encoder: VideoEncoder; quality: Quality }): string[] {
+/** Bitrate del Opus del audio de la PC (el mismo default que la librería). */
+export const AUDIO_BITRATE_K = 128;
+
+/**
+ * Argumentos de ffmpeg: entrada por stdin, H264 de baja latencia, keyframe (IDR) cada 2 s, NUT por stdout.
+ * Con `audio`: además PCM s16 48 kHz estéreo por el fd 3 (de pw-record) → Opus 48 kHz estéreo en el mismo NUT
+ * (la librería solo acepta Opus como audio: LibavDemuxer allowedAudioCodec).
+ */
+export function ffmpegArgs(opts: { backend: CaptureBackend; encoder: VideoEncoder; quality: Quality; audio?: boolean }): string[] {
   const { backend, encoder, quality } = opts;
+  const audioIn = opts.audio ? ["-f", "s16le", "-ar", "48000", "-ac", "2", "-i", "pipe:3"] : [];
+  const audioOut = opts.audio
+    ? [
+        "-c:a",
+        "libopus",
+        "-b:a",
+        `${AUDIO_BITRATE_K}k`,
+        "-ar",
+        "48000",
+        "-ac",
+        "2",
+        // El primer paquete de Opus trae pts negativo (pre-skip del encoder) y el muxer NUT lo rechaza
+        // ("Negative pts not supported"); -avoid_negative_ts no alcanza con dos entradas.
+        "-bsf:a",
+        "setts=ts=TS-STARTPTS",
+        // Que el muxer no retenga audio esperando un paquete de video (por defecto, hasta 10 s).
+        "-max_interleave_delta",
+        "50000",
+      ]
+    : [];
   const gop = String(quality.fps * KEYFRAME_SECONDS);
   const input =
     backend === "wf-recorder"
@@ -182,7 +221,8 @@ export function ffmpegArgs(opts: { backend: CaptureBackend; encoder: VideoEncode
     "error",
     ...(encoder === "vaapi" ? ["-vaapi_device", VAAPI_DEVICE] : []),
     ...input,
-    "-an",
+    ...audioIn,
+    ...(opts.audio ? ["-map", "0:v:0", "-map", "1:a:0"] : ["-an"]),
     "-vf",
     filters.join(","),
     ...codec,
@@ -200,6 +240,7 @@ export function ffmpegArgs(opts: { backend: CaptureBackend; encoder: VideoEncode
     gop,
     "-force_key_frames",
     `expr:gte(t,n_forced*${KEYFRAME_SECONDS})`,
+    ...audioOut,
     "-flush_packets",
     "1",
     "-f",
@@ -319,6 +360,8 @@ function tailStderr(proc: ProcLike): { text(): string } {
 /**
  * Arranca captura → ffmpeg. Con wf-recorder el stdout de la captura va directo al stdin de ffmpeg; con
  * grim se saca un frame por vez en JS (un proceso `grim` corto por frame) y se escribe en ffmpeg.
+ * Con `audio`, pw-record (ver desktop-audio.ts) escribe directo en el fd 3 de ffmpeg, sin pasar por JS. Si
+ * pw-record no arranca, tira (y no deja nada vivo): el que llama reintenta sin audio.
  */
 export function startCapture(opts: {
   backend: CaptureBackend;
@@ -326,6 +369,7 @@ export function startCapture(opts: {
   monitor: string;
   quality: Quality;
   env?: CaptureEnv;
+  audio?: boolean;
 }): CaptureHandle {
   const env = opts.env ?? defaultCaptureEnv;
   if (!isValidMonitorName(opts.monitor)) throw new Error("monitor inválido");
@@ -344,14 +388,64 @@ export function startCapture(opts: {
   let capture: ProcLike | null = null;
   let ffmpeg: ProcLike;
   let loop: Promise<void> = Promise.resolve();
+  let recorder: ProcLike | null = null;
+  let linker: AudioLinker | null = null;
+  const audio = opts.audio === true;
   const ffArgs = ffmpegArgs(opts);
+  const fd3 = audio ? { fd3: "pipe" as const } : {};
+
+  /** pw-record → fd 3 de ffmpeg. Si no se puede, mata lo que ya arrancó y tira. */
+  const attachAudio = (): void => {
+    if (!audio) return;
+    const fd = ffmpeg.stdio?.[3];
+    try {
+      if (typeof fd !== "number") throw new Error("ffmpeg sin fd 3");
+      recorder = track(env.spawn(desktopAudioCommand(), { stdin: "ignore", stdout: fd, stderr: "ignore" }));
+    } catch (error) {
+      stopping = true;
+      for (const proc of procs) {
+        try {
+          proc.kill("SIGKILL");
+        } catch {
+          // ya había salido
+        }
+      }
+      throw error;
+    } finally {
+      // Nuestra copia del extremo de escritura: si queda abierta, ffmpeg nunca ve el fin del audio.
+      if (typeof fd === "number") {
+        try {
+          closeSync(fd);
+        } catch {
+          // ya cerrado
+        }
+      }
+    }
+    const rec = recorder;
+    linker = startAudioLinker({ env, recorderPid: rec.pid });
+    // Sin audio la librería frena el video esperándolo (lo sincroniza contra el audio): mejor cortar.
+    void rec.exited.then(
+      (code) => {
+        if (stopping) return;
+        log.warn("golive.audio-ended", { close_code: code });
+        try {
+          ffmpeg.kill("SIGTERM");
+        } catch {
+          // ya había salido
+        }
+      },
+      () => {},
+    );
+  };
 
   if (opts.backend === "wf-recorder") {
-    capture = track(env.spawn(wfRecorderCommand(opts.monitor, opts.quality), { stdin: "ignore", stdout: "pipe", stderr: "ignore" }));
+    capture = track(env.spawn(wfRecorderCommand(opts.monitor, opts.quality, { noDamage: audio }), { stdin: "ignore", stdout: "pipe", stderr: "ignore" }));
     const piped = capture.stdout && typeof capture.stdout !== "number" ? capture.stdout : "ignore";
-    ffmpeg = track(env.spawn(ffArgs, { stdin: piped, stdout: "pipe", stderr: "pipe" }));
+    ffmpeg = track(env.spawn(ffArgs, { stdin: piped, stdout: "pipe", stderr: "pipe", ...fd3 }));
+    attachAudio();
   } else {
-    ffmpeg = track(env.spawn(ffArgs, { stdin: "pipe", stdout: "pipe", stderr: "pipe" }));
+    ffmpeg = track(env.spawn(ffArgs, { stdin: "pipe", stdout: "pipe", stderr: "pipe", ...fd3 }));
+    attachAudio();
     const sink = ffmpeg.stdin && typeof ffmpeg.stdin !== "number" ? ffmpeg.stdin : null;
     loop = (async () => {
       let failures = 0;
@@ -408,7 +502,14 @@ export function startCapture(opts: {
         stopping = true;
         output.destroy();
         const live = current;
-        await Promise.all([capture ? killAndWait(capture) : null, live ? killAndWait(live) : null, killAndWait(ffmpeg)]);
+        const rec: ProcLike | null = recorder;
+        await Promise.all([
+          capture ? killAndWait(capture) : null,
+          live ? killAndWait(live) : null,
+          rec ? killAndWait(rec) : null,
+          killAndWait(ffmpeg),
+          linker?.stop(),
+        ]);
         await loop;
         // un grim que arrancó justo mientras parábamos
         await Promise.all([...procs].map((p) => killAndWait(p)));
