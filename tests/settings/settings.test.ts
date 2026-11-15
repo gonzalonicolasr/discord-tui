@@ -207,4 +207,15 @@ describe("mic safety settings", () => {
     expect(normalizeSettings({ joinMuted: false }).joinMuted).toBe(false);
     expect(normalizeSettings({ joinMuted: "no", theme: "light" })).toMatchObject({ joinMuted: true, theme: "light" });
   });
+
+  test("auto mute: 10 minutes by default, null turns it off, bad values fall back to 10", () => {
+    expect(DEFAULT_SETTINGS.autoMuteAfterMinutes).toBe(10);
+    expect(normalizeSettings({}).autoMuteAfterMinutes).toBe(10);
+    expect(normalizeSettings({ autoMuteAfterMinutes: null }).autoMuteAfterMinutes).toBeNull();
+    expect(normalizeSettings({ autoMuteAfterMinutes: 30 }).autoMuteAfterMinutes).toBe(30);
+    expect(normalizeSettings({ autoMuteAfterMinutes: 4.6 }).autoMuteAfterMinutes).toBe(5);
+    for (const bad of [0, -3, "10", Number.NaN, true]) {
+      expect(normalizeSettings({ autoMuteAfterMinutes: bad, theme: "light" })).toMatchObject({ autoMuteAfterMinutes: 10, theme: "light" });
+    }
+  });
 });

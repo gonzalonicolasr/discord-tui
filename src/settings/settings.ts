@@ -16,6 +16,8 @@ export const OWN_STATUSES: OwnStatus[] = ["online", "idle", "dnd", "invisible"];
 /** Calidad de Go Live. Sin Nitro el cliente oficial limita a 720p30; 1080p30 puede necesitar Nitro. */
 export type StreamQuality = "720p30" | "1080p30";
 export const STREAM_QUALITIES: StreamQuality[] = ["720p30", "1080p30"];
+/** Opciones de "silenciarme si no uso la PC" en Settings (null = apagado). */
+export const AUTO_MUTE_CHOICES: (number | null)[] = [null, 5, 10, 15, 30, 60];
 
 /** Sonidos de eventos (entrar/salir de voz, mute, menciones…). */
 export interface SoundSettings {
@@ -46,6 +48,11 @@ export interface Settings {
   sounds: SoundSettings;
   /** Al entrar a un canal de voz por decisión propia, el micrófono arranca cerrado (mover/reconectar/recargar no). */
   joinMuted: boolean;
+  /**
+   * Con el mic abierto en una llamada, cerrarlo tras estos minutos sin usar la PC (teclado/mouse de todo el sistema)
+   * o al bloquear la pantalla. null = nunca. Con push-to-talk no aplica.
+   */
+  autoMuteAfterMinutes: number | null;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -65,6 +72,7 @@ export const DEFAULT_SETTINGS: Settings = {
   streamQuality: "720p30",
   sounds: { enabled: true, volume: 60, events: allCues(true) },
   joinMuted: true,
+  autoMuteAfterMinutes: 10,
 };
 
 function allCues(on: boolean): Record<Cue, boolean> {
@@ -110,10 +118,10 @@ function parseDevice(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-function parseIdle(value: unknown): number | null {
+function parseIdle(value: unknown, fallback = DEFAULT_SETTINGS.idleAfterMinutes): number | null {
   if (value === null) return null;
   if (typeof value === "number" && Number.isFinite(value) && value > 0) return Math.round(value);
-  return DEFAULT_SETTINGS.idleAfterMinutes;
+  return fallback;
 }
 
 function parseSounds(value: unknown): SoundSettings {
@@ -156,6 +164,7 @@ export function normalizeSettings(raw: unknown): Settings {
       : DEFAULT_SETTINGS.streamQuality,
     sounds: parseSounds(record.sounds),
     joinMuted: typeof record.joinMuted === "boolean" ? record.joinMuted : DEFAULT_SETTINGS.joinMuted,
+    autoMuteAfterMinutes: parseIdle(record.autoMuteAfterMinutes, DEFAULT_SETTINGS.autoMuteAfterMinutes),
   };
 }
 

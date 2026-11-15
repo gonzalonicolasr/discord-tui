@@ -1,8 +1,10 @@
 import { createActions, type Actions } from "../actions";
+import { createAutoMute } from "../actions/auto-mute";
 import { createIdlePresence } from "../actions/presence";
 import { createStatusSync } from "../actions/status-sync";
 import type { Session } from "../auth/session";
 import type { ClientProps } from "../client-props/props";
+import { watchWaylandIdle, type SystemIdleSource } from "../desktop/wayland-idle";
 import { createGateway } from "../gateway/connection";
 import { createHttp } from "../rest/http";
 import { createRestClient } from "../rest/client";
@@ -54,6 +56,8 @@ export interface RuntimeDeps {
   sounds?: SoundPlayer;
   /** Notificación de escritorio; por defecto `notify-send`. */
   notify?: (title: string, body: string) => void;
+  /** Inactividad del sistema y bloqueo de pantalla (auto-silencio); por defecto el compositor por Wayland. */
+  systemIdle?: SystemIdleSource;
 }
 
 const defaultMedia: VoiceMedia = {
@@ -134,6 +138,12 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       startPlayback: (opts) => media.startPlayback(opts),
     });
   const detachSounds = attachVoiceSounds(store, (cue) => sounds.play(cue));
+  const autoMute = createAutoMute({
+    store,
+    voice,
+    source: deps.systemIdle ?? ((ms, events) => watchWaylandIdle(ms, events)),
+    notify: (title, body) => (deps.notify ?? notify)(title, body),
+  });
   const statusSync = createStatusSync({ store, rest, presence: idle });
   const actions = createActions({ store, rest, gateway, voice, fetch: deps.fetch, presence: idle, statusSync });
   store.dispatch({ type: "connection", status: gateway.status });
@@ -270,6 +280,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       clearInterval(memLog);
       offAck();
       detachSounds();
+      autoMute.stop();
       idle.stop();
       if (store.getState().voice.channelId !== null) {
         await Promise.race([voice.leaveVoice(), new Promise((resolve) => setTimeout(resolve, 1_500))]);

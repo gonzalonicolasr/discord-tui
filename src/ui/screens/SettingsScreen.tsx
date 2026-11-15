@@ -12,7 +12,7 @@ import { useSelector } from "../store-bridge";
 import { cycleTheme, themeEntries, themeLabel, useTheme } from "../theme";
 import { Button, type Click } from "../components/Button";
 import { statusLabel } from "../components/StatusMenu";
-import { OWN_STATUSES, STREAM_QUALITIES } from "../../settings/settings";
+import { AUTO_MUTE_CHOICES, OWN_STATUSES, STREAM_QUALITIES } from "../../settings/settings";
 import { CUES, type Cue } from "../../sounds/synth";
 
 /** Nombre de cada sonido en la fila de Settings. */
@@ -49,6 +49,7 @@ type Section =
   | "soundVolume"
   | "soundEvent"
   | "joinMuted"
+  | "autoMute"
   | "status"
   | "theme"
   | "images"
@@ -66,6 +67,7 @@ const SECTIONS: Section[] = [
   "soundVolume",
   "soundEvent",
   "joinMuted",
+  "autoMute",
   "status",
   "theme",
   "images",
@@ -171,6 +173,11 @@ export function SettingsScreen(props: {
       return patch({ sounds: { ...settings().sounds, events } });
     }
     if (section === "joinMuted" && dir === 0) return patch({ joinMuted: !settings().joinMuted });
+    if (section === "autoMute") {
+      const index = Math.max(0, AUTO_MUTE_CHOICES.indexOf(settings().autoMuteAfterMinutes));
+      const step = dir === 0 ? 1 : dir;
+      return patch({ autoMuteAfterMinutes: AUTO_MUTE_CHOICES[(index + step + AUTO_MUTE_CHOICES.length) % AUTO_MUTE_CHOICES.length] ?? null });
+    }
     if (section === "streamMonitor") return cycleMonitor(dir === 0 ? 1 : dir);
     if (section === "streamQuality") {
       const index = STREAM_QUALITIES.indexOf(settings().streamQuality);
@@ -221,7 +228,8 @@ export function SettingsScreen(props: {
     section === "sensitivity" ||
     section === "soundVolume" ||
     section === "soundEvent" ||
-    section === "streamMonitor";
+    section === "streamMonitor" ||
+    section === "autoMute";
   const line = (section: Section, text: string): JSX.Element => (
     <box
       flexDirection="row"
@@ -301,6 +309,10 @@ export function SettingsScreen(props: {
         )}
         <text fg={theme().header}>Llamadas</text>
         {line("joinMuted", `entrar a voz silenciado: ${settings().joinMuted ? "sí" : "no"}`)}
+        {line(
+          "autoMute",
+          `silenciarme si no uso la PC: ${settings().autoMuteAfterMinutes === null ? "no" : `a los ${settings().autoMuteAfterMinutes} min o al bloquear`}`,
+        )}
         <text fg={theme().header}>Cuenta</text>
         {line("status", `estado: ${statusLabel(settings().status)}  (Enter o h/l)`)}
         <text fg={theme().header}>Apariencia</text>

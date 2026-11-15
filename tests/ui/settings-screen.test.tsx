@@ -252,4 +252,33 @@ describe("SettingsScreen", () => {
     expect(store.getState().settings.joinMuted).toBe(false);
     expect(captureCharFrame()).toContain("entrar a voz silenciado: no");
   });
+  test("Llamadas: 'silenciarme si no uso la PC' cycles off → 5 → 10 → 15 → 30 → 60 min with Enter or h/l", async () => {
+    const { store, actions, deps } = setup();
+    const { mockInput, renderOnce, captureCharFrame } = await testRender(
+      () => <SettingsScreen store={store} actions={actions} deps={deps} inVoice={false} onClose={() => {}} />,
+      { width: 90, height: 44 },
+    );
+    await renderOnce();
+    expect(captureCharFrame()).toContain("silenciarme si no uso la PC: a los 10 min o al bloquear");
+    for (let i = 0; i < 11; i += 1) mockInput.pressKey("j");
+    await renderOnce();
+    mockInput.pressEnter();
+    await renderOnce();
+    expect(store.getState().settings.autoMuteAfterMinutes).toBe(15);
+    mockInput.pressKey("l");
+    mockInput.pressKey("l");
+    await renderOnce();
+    expect(store.getState().settings.autoMuteAfterMinutes).toBe(60);
+    mockInput.pressKey("l");
+    await renderOnce();
+    expect(store.getState().settings.autoMuteAfterMinutes).toBeNull();
+    expect(captureCharFrame()).toContain("silenciarme si no uso la PC: no");
+    mockInput.pressKey("l");
+    await renderOnce();
+    expect(store.getState().settings.autoMuteAfterMinutes).toBe(5);
+    mockInput.pressKey("h");
+    mockInput.pressKey("h");
+    await renderOnce();
+    expect(store.getState().settings.autoMuteAfterMinutes).toBe(60);
+  });
 });
