@@ -153,6 +153,60 @@ describe("adaptive jitter buffer", () => {
   });
 });
 
+describe("PLC in the jitter buffer", () => {
+  const plcOf = (sample: number) => () => {
+    const out = new Uint8Array(3840 * 6);
+    const view = new DataView(out.buffer);
+    for (let i = 0; i < out.length / 2; i += 1) view.setInt16(i * 2, sample, true);
+    return out;
+  };
+
+  test("a frame missing in the middle of a phrase is filled with concealment instead of silence, and audio resumes right away", () => {
+    const jb = createJitterBuffer({ prebufferFrames: 2, rebufferFrames: 2 });
+    jb.setConcealer!(plcOf(7));
+    jb.push(pcmOf(1));
+    jb.push(pcmOf(2));
+    expect(sampleAt(jb.pop()!, 0)).toBe(1);
+    expect(sampleAt(jb.pop()!, 0)).toBe(2);
+    // falta el 3: PLC
+    expect(sampleAt(jb.pop()!, 0)).toBe(7);
+    // llega el 4: se sigue con él sin esperar a juntar 2
+    jb.push(pcmOf(4));
+    expect(sampleAt(jb.pop()!, 0)).toBe(4);
+    expect(jb.takeStats!()).toMatchObject({ concealed: 1, underruns: 1 });
+  });
+
+  test("at most 60 ms are concealed in a row; then silence", () => {
+    const jb = createJitterBuffer({ prebufferFrames: 1, rebufferFrames: 1 });
+    jb.setConcealer!(plcOf(7));
+    jb.push(pcmOf(1));
+    jb.pop();
+    const out = Array.from({ length: 6 }, () => jb.pop());
+    expect(out.map((f) => (f ? sampleAt(f, 0) : null))).toEqual([7, 7, 7, null, null, null]);
+  });
+
+  test("the end of a phrase is not concealed (no PLC tail after the speaker stopped)", () => {
+    let asked = 0;
+    const jb = createJitterBuffer({ prebufferFrames: 1, rebufferFrames: 1 });
+    jb.setConcealer!(() => (asked++, plcOf(7)()));
+    jb.push(pcmOf(1));
+    jb.end!();
+    jb.pop();
+    expect(jb.pop()).toBeNull();
+    expect(asked).toBe(0);
+  });
+
+  test("a concealer that throws or has nothing leaves the slot silent", () => {
+    for (const fn of [() => { throw new Error("roto"); }, () => null]) {
+      const jb = createJitterBuffer({ prebufferFrames: 1, rebufferFrames: 1 });
+      jb.setConcealer!(fn);
+      jb.push(pcmOf(1));
+      jb.pop();
+      expect(jb.pop()).toBeNull();
+    }
+  });
+});
+
 test("when the phrase ends, the frames still waiting for the cushion play right away instead of at the next phrase", () => {
   const jb = createJitterBuffer({ prebufferFrames: 3, rebufferFrames: 2 });
   // Un "sí" corto: 2 frames, menos que el colchón para arrancar, y termina la frase.

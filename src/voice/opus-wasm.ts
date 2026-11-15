@@ -68,6 +68,11 @@ export function setWasmModuleFactoryForTests(fn: (() => NativeModule) | null): v
 export interface WasmOpus {
   encode(pcm: Uint8Array, frameSize: number): Uint8Array;
   decode(packet: Uint8Array): Uint8Array;
+  /**
+   * PLC de Opus: el audio que "sigue" cuando falta un paquete (decodificar sin datos). El C++ siempre entrega 120 ms
+   * (5760 muestras, entra justo en el buffer de salida); quien lo usa toma lo que necesita del principio.
+   */
+  conceal(): Uint8Array;
   delete(): void;
   /** Su módulo se descartó por un trap (de este códec o de otro): hay que pasarse a uno nuevo. */
   stale(): boolean;
@@ -93,6 +98,12 @@ export function createWasmOpus(channels = 2): WasmOpus {
     throw error;
   }
   let alive = true;
+
+  function pcmOut(samples: number): Uint8Array {
+    if (samples < 0) throw new Error(`Decode error: ${samples}`);
+    const bytes = samples * channels * 2;
+    return Uint8Array.from(m.HEAPU16.subarray(outPcm >> 1, (outPcm >> 1) + bytes));
+  }
 
   /** Llama al C++; si trapea, este códec y su módulo quedan descartados (no se vuelve a entrar al módulo roto). */
   function call<T>(fn: () => T): T {
@@ -121,10 +132,11 @@ export function createWasmOpus(channels = 2): WasmOpus {
       if (!alive) throw new Error("códec liberado");
       if (packet.byteLength > MAX_PACKET_BYTES) throw new RangeError("paquete Opus demasiado grande");
       m.HEAPU8.set(packet, inPacket);
-      const samples = call(() => handler._decode(inPacket, packet.byteLength, outPcm));
-      if (samples < 0) throw new Error(`Decode error: ${samples}`);
-      const bytes = samples * channels * 2;
-      return Uint8Array.from(m.HEAPU16.subarray(outPcm >> 1, (outPcm >> 1) + bytes));
+      return pcmOut(call(() => handler._decode(inPacket, packet.byteLength, outPcm)));
+    },
+    conceal(): Uint8Array {
+      if (!alive) throw new Error("códec liberado");
+      return pcmOut(call(() => handler._decode(inPacket, 0, outPcm)));
     },
     stale(): boolean {
       return native !== m;

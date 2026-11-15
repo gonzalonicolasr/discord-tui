@@ -4,6 +4,7 @@ import { createMixer } from "../../src/voice/mixer";
 import { pcmOf, sampleAt } from "../helpers/pcm";
 
 const FRAME_MS = 20;
+const CONCEALED = 7;
 
 /**
  * Llamada simulada con reloj falso, de a 1 ms. Una persona habla en frases (1,5 s de voz y 0,5 s de silencio, como
@@ -18,6 +19,8 @@ function simulate(opts: {
   arrival?: (sentAt: number) => number | null;
   /** Pausas del event loop: [desde, duración] en ms. */
   stalls?: [number, number][];
+  /** El decoder tiene PLC (como el WASM): devuelve 120 ms de "relleno" (muestras en CONCEALED). */
+  conceal?: boolean;
 }) {
   let t = 0;
   let tick = null as (() => void) | null;
@@ -47,6 +50,7 @@ function simulate(opts: {
   events.sort((a, b) => a.at - b.at);
   const stalled = (ms: number) => (opts.stalls ?? []).some(([from, length]) => ms >= from && ms < from + length);
 
+  if (opts.conceal) mixer.buffer("u").setConcealer?.(() => new Uint8Array(new Int16Array(6 * 1920).fill(CONCEALED).buffer));
   const played: number[] = [];
   let deviceAt: number | null = null;
   mixer.start();
@@ -75,7 +79,7 @@ function simulate(opts: {
   /**
    * Frames que se oyen sin la voz en medio de una frase (lo que Gon oye como "se corta"), desde `fromPhrase`.
    * `silence`: zcord escribió silencio (jitter buffer vacío o silencio metido por el mixer); `starved`: pw-cat se
-   * quedó sin datos (zcord trabado más que su colchón); `all`: los dos.
+   * quedó sin datos (zcord trabado más que su colchón); `all`: cualquier cosa que no sea la voz (también el PLC).
    */
   const cuts = (fromPhrase = 0, kind: "all" | "silence" | "starved" = "all") => {
     let total = 0;
@@ -85,8 +89,7 @@ function simulate(opts: {
       if (first === -1) continue;
       for (let i = first; i <= last; i += 1) {
         if (played[i] === 100 + phrase) continue;
-        const starved = played[i] === -1;
-        if (kind === "all" || (kind === "starved") === starved) total += 1;
+        if (kind === "all" || (kind === "starved" && played[i] === -1) || (kind === "silence" && played[i] === 0)) total += 1;
       }
     }
     return total;
@@ -133,5 +136,19 @@ describe("dropouts while listening (fake clock)", () => {
     // La primera pausa cae en la frase 5 (la que enseña): se mira desde la 6.
     expect(sim.cuts(6, "silence")).toBe(0);
     expect(sim.cuts(6, "starved")).toBeLessThanOrEqual(stalls.length * 4);
+  });
+
+  test("single lost packets: with Opus PLC the gap is concealed instead of heard as silence", () => {
+    // 4 % de paquetes perdidos sueltos y algo de jitter (0-15 ms).
+    const network = () => {
+      let seed = 3;
+      const rnd = () => ((seed = (seed * 1103515245 + 12345) >>> 0) / 2 ** 32);
+      return (sentAt: number) => (rnd() < 0.04 ? null : sentAt + 5 + Math.floor(rnd() * 15));
+    };
+    const without = simulate({ seconds: 40, arrival: network() });
+    const withPlc = simulate({ seconds: 40, arrival: network(), conceal: true });
+    expect(without.cuts(5, "silence")).toBeGreaterThan(0);
+    expect(withPlc.cuts(5, "silence")).toBe(0);
+    expect(withPlc.mixer.stats().concealed).toBeGreaterThan(0);
   });
 });

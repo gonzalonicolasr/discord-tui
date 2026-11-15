@@ -10,6 +10,8 @@ export interface MixerStats {
   jitterDrops: number;
   /** El mayor colchón aprendido por un jitter buffer en la ventana, en ms. */
   jitterMsMax: number;
+  /** Frames que faltaban a mitad de una frase y se taparon con el PLC de Opus. */
+  concealed: number;
   /** Ticks que llegaron con 2 o más slots de atraso. */
   lateTicks: number;
   /** Slots salteados tras una pausa larga del event loop. */
@@ -58,7 +60,7 @@ export interface Mixer {
 }
 
 function emptyStats(): MixerStats {
-  return { underruns: 0, jitterDrops: 0, jitterMsMax: 0, lateTicks: 0, skippedFrames: 0, loopLagMaxMs: 0 };
+  return { underruns: 0, jitterDrops: 0, jitterMsMax: 0, concealed: 0, lateTicks: 0, skippedFrames: 0, loopLagMaxMs: 0 };
 }
 
 function addJitterStats(into: MixerStats, jb: JitterBuffer): void {
@@ -67,6 +69,7 @@ function addJitterStats(into: MixerStats, jb: JitterBuffer): void {
   into.underruns += s.underruns;
   into.jitterDrops += s.drops;
   into.jitterMsMax = Math.max(into.jitterMsMax, s.targetFrames * FRAME_MS);
+  into.concealed += s.concealed;
 }
 
 export function createMixer(deps: {

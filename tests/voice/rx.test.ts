@@ -330,3 +330,35 @@ test("deafened with someone talking: their decoder is kept and their speaking in
   expect(speaking).toEqual(["a:true"]);
   expect(destroyed).toBe(0);
 });
+
+test("the jitter buffer conceals with the PLC of that person's current decoder", () => {
+  const opusListeners = new Set<(userId: string, opus: Uint8Array) => void>();
+  const concealers = new Map<string, () => Uint8Array | null>();
+  let made = 0;
+  const rx = createReceiver({
+    session: { onOpus: (fn) => (opusListeners.add(fn), () => opusListeners.delete(fn)), onSpeaking: () => () => {} },
+    mixer: {
+      buffer: (userId) => ({
+        push: () => {},
+        pop: () => null,
+        size: 0,
+        reset: () => {},
+        setConcealer: (fn) => void (fn ? concealers.set(userId, fn) : concealers.delete(userId)),
+      }),
+      remove: () => {},
+    },
+    makeDecoder: () => {
+      const id = ++made;
+      return { decode: (o: Uint8Array) => o, conceal: () => Uint8Array.of(id) };
+    },
+    isDeaf: () => false,
+    onSpeaking: () => {},
+    setTimer: (() => 0) as never,
+    clearTimer: (() => {}) as never,
+  });
+  opusListeners.forEach((fn) => fn("a", Uint8Array.of(1, 2, 3)));
+  expect(concealers.get("a")!()).toEqual(Uint8Array.of(1));
+  // Si se le libera el decoder, el PLC no usa uno destruido.
+  rx.removeUser("a");
+  expect(concealers.get("a")!()).toBeNull();
+});

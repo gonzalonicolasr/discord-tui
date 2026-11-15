@@ -5,6 +5,8 @@ import { createWasmOpus, isWasmTrap } from "./opus-wasm";
 export interface OpusCodec {
   encode(pcm: Uint8Array): Uint8Array;
   decode(opus: Uint8Array): Uint8Array;
+  /** PLC: hasta 120 ms de audio para tapar un paquete que falta (solo WASM; el nativo no lo tiene). */
+  conceal?(): Uint8Array;
   /** Libera la memoria del códec (en WASM no la junta el GC). */
   destroy(): void;
   backend: "native" | "wasm";
@@ -22,6 +24,7 @@ interface NativeOpus {
 interface WasmOpus {
   encode(buffer: Buffer, frameSize: number): Buffer;
   decode(buffer: Buffer): Buffer;
+  conceal(): Buffer;
   delete(): void;
   stale(): boolean;
 }
@@ -50,6 +53,7 @@ function loadWasm(): WasmOpus | null {
     return {
       encode: (buffer, frameSize) => Buffer.from(codec.encode(buffer, frameSize)),
       decode: (buffer) => Buffer.from(codec.decode(buffer)),
+      conceal: () => Buffer.from(codec.conceal()),
       delete: () => codec.delete(),
       stale: () => codec.stale(),
     };
@@ -102,8 +106,23 @@ export function createOpusCodec(opts?: { prefer?: "native" | "wasm" }): OpusCode
     if (which === "wasm" && (opus as WasmOpus).stale()) moveToFreshModule();
   }
 
+  const conceal =
+    which === "wasm"
+      ? {
+          conceal(): Uint8Array {
+            checkModule();
+            try {
+              return new Uint8Array((opus as WasmOpus).conceal());
+            } catch (error) {
+              return recover(error);
+            }
+          },
+        }
+      : {};
+
   return {
     backend: which,
+    ...conceal,
     encode(pcm: Uint8Array): Uint8Array {
       checkModule();
       try {
