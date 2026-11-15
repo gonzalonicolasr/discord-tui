@@ -12,6 +12,8 @@ export const STREAM_ERRORS = {
   leftVoice: "saliste de la voz: se cortó la transmisión",
   gatewayLost: "se perdió la conexión con Discord: se cortó la transmisión",
   newSession: "Discord abrió una sesión nueva: se cortó la transmisión",
+  noDesktopAudio: "transmitiendo sin el audio de la PC (no pude capturarlo con PipeWire: hacen falta pw-record, pw-link y pw-dump)",
+  noDesktopAudioGrim: "con grim la transmisión va sin el audio de la PC",
 } as const;
 
 /** Aviso para el camino lento (grim en loop, ~10 fps). */

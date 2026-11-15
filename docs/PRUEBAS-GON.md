@@ -84,11 +84,12 @@ terminar en ban (ver `docs/protocol-notes.md`, "Transmitir pantalla").
       "Transmitir pantalla" podés dejar uno fijo y la calidad, 720p30 por defecto). En menos de 15 s la barra dice
       `🔴 EN VIVO · detener`. Si sale `✗ transmisión: …`, copiá esa línea y el final del log.
 - [ ] Tu amigo hace click en "LIVE" en tu nombre y te cuenta: ¿ve la pantalla? ¿fluido o trabado? ¿tarda en arrancar (debería
-      verse en ≤ 2 s, hay keyframe cada 2 s)? ¿hay audio (no debería: transmitimos solo video)? En su cliente, ¿el stream
+      verse en ≤ 2 s, hay keyframe cada 2 s)? ¿se oye el audio de tu PC (poné algo a sonar) y NO se escuchan a sí mismos (sin eco de la llamada)? En su cliente, ¿el stream
       muestra el candado / código de privacidad E2EE? Cuando entra, la barra pasa a `👁 1`.
 - [ ] Mientras transmitís, en la lista de la izquierda vos (y cualquiera que transmita) figura con `📺 en vivo`.
 - [ ] `🔴 EN VIVO · detener` → tu amigo deja de verla. Probá también salir de la voz transmitiendo (`✕ salir`): corta solo.
-- [ ] Con la TUI todavía abierta y sin transmitir: `pgrep -a "wf-recorder|ffmpeg|grim"` no muestra nada. Y después de `q`, tampoco.
+- [ ] Con la TUI todavía abierta y sin transmitir: `pgrep -a "wf-recorder|ffmpeg|grim"` no muestra nada, y `pw-link -l | grep zcord-golive`
+      tampoco (no quedan enlaces de audio). Y después de `q`, tampoco.
 - [ ] `bun run leak-check` → `OK`.
 
 ## 7. Ver la transmisión de otro [2ª]

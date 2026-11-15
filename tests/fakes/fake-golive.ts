@@ -78,12 +78,14 @@ export function fakeGoLiveLib() {
   };
 }
 
-export function fakeCapture() {
-  const started: Array<{ backend: string; encoder: string; monitor: string; quality: unknown }> = [];
+export function fakeCapture(opts: { failWithAudio?: boolean } = {}) {
+  const started: Array<{ backend: string; encoder: string; monitor: string; quality: unknown; audio: boolean }> = [];
   let stops = 0;
   let endFns: Array<() => void> = [];
-  const start = (opts: { backend: any; encoder: any; monitor: string; quality: any }): CaptureHandle => {
-    started.push({ backend: opts.backend, encoder: opts.encoder, monitor: opts.monitor, quality: opts.quality });
+  const start = (o: { backend: any; encoder: any; monitor: string; quality: any; audio?: boolean }): CaptureHandle => {
+    const audio = o.audio ?? false;
+    started.push({ backend: o.backend, encoder: o.encoder, monitor: o.monitor, quality: o.quality, audio });
+    if (audio && opts.failWithAudio) throw new Error("pw-record no arrancó");
     let alive = true;
     return {
       output: Readable.from([]),

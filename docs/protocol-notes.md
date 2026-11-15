@@ -230,8 +230,19 @@ Producto desde el 2026-11-08 (`src/golive/`). Sin probar todavía contra Discord
 de esta máquina a `/dev/null`; el primer stream real es el 🧍 Paso de Gon (`docs/PRUEBAS-GON.md`, sección 6).
 
 **Qué hace:** botón `📺 transmitir` en la barra de voz o `S` → si hay más de un monitor y no hay uno guardado en settings que siga
-conectado, un picker → `⏳ iniciando…` → `🔴 EN VIVO · detener` (+ `👁 N` espectadores). Una transmisión a la vez, solo video
-(sin audio del sistema), 720p30 por defecto (1080p30 en settings, puede necesitar Nitro **[sin verificar]**).
+conectado, un picker → `⏳ iniciando…` → `🔴 EN VIVO · detener` (+ `👁 N` espectadores). Una transmisión a la vez, video + el
+audio de la PC sin el de zcord (ver "Audio de la PC" abajo; con grim o sin PipeWire, solo video), 720p30 por defecto (1080p30 en settings, puede necesitar Nitro **[sin verificar]**).
+
+**Audio de la PC** (`src/golive/desktop-audio.ts`, 2026-11-15): un `pw-record --target 0` propio (nodo `zcord-golive-audio`,
+`node.always-process` para que mande silencio aunque no suene nada) escribe PCM s16 48 kHz estéreo directo en el fd 3 de ffmpeg,
+que lo pasa a Opus 128k en el mismo NUT (la librería solo acepta Opus). Cada 1 s se lee `pw-dump` y se enlazan con `pw-link` las
+salidas (`Stream/Output/Audio`) de las demás apps a ese nodo: no se mueve ningún stream. Sin eco: se saltean zcord y sus hijos
+directos (el `pw-cat` de la voz y el de los audios, por el pid del cliente en `/proc/<pid>/stat`) y los que mezclan todo
+(EasyEffects, loopbacks de pipewire/pipewire-pulse/wireplumber). No se usa el monitor del sink: ahí ya está mezclada la voz de la
+llamada. Los enlaces mueren con el nodo, y el nodo con pw-record (stop, o EPIPE si zcord se cae). Gotchas: el planificador de
+ffmpeg ≥7 no deja que una entrada se adelante más de 100 ms a otra, y wf-recorder sin `-D` no manda frames con la pantalla quieta
+(medido): con audio se usa `-D`. El primer paquete de Opus trae pts negativo y NUT lo rechaza: `-bsf:a setts=ts=TS-STARTPTS`. Si
+pw-record se muere a mitad, se corta la transmisión (la librería sincroniza el video contra el audio y se congelaría).
 
 **Protocolo** (`src/golive/shim.ts`, `golive.ts`): el `Streamer` de `@dank074/discord-video-stream` 7.0.0 sobre NUESTRO gateway;
 solo pasan los ops 18 `STREAM_CREATE {type, guild_id, channel_id, preferred_region:null}`, 22 `STREAM_SET_PAUSED {stream_key,

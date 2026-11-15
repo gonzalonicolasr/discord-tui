@@ -17,6 +17,7 @@ import {
   type CaptureHandle,
   type Monitor,
 } from "./capture";
+import { probeDesktopAudio } from "./desktop-audio";
 import { GRIM_SLOW, STREAM_ERRORS, streamCloseMessage, streamDeleteMessage } from "./errors";
 import { createGoLiveShim, loadGoLiveLib, streamKeyFor, type GoLiveLib, type GoLiveShim } from "./shim";
 
@@ -76,8 +77,14 @@ export function createGoLive(deps: {
   const meId = (): string | null => store.getState().me?.id ?? null;
   const setStream = (patch: Partial<StreamState>): void => store.dispatch({ type: "voice/stream", patch });
 
-  function notice(text: string, level: "info" | "warn" | "error" = "warn"): void {
-    store.dispatch({ type: "notice/push", key: "golive", level, text });
+  function notice(text: string, level: "info" | "warn" | "error" = "warn", key = "golive"): void {
+    store.dispatch({ type: "notice/push", key, level, text });
+  }
+
+  /** La transmisión sigue solo con video: queda en el log y en un aviso (aparte del de grim). */
+  function videoOnly(text: string, why: string): void {
+    log.warn("golive.no-audio", { state: why });
+    notice(text, "info", "golive-audio");
   }
 
   function finish(a: Active, error: string | null): Promise<void> {
@@ -179,6 +186,11 @@ export function createGoLive(deps: {
     }
     const encoder = await pickEncoder(env).catch(() => "x264" as const);
     if (active !== a) return;
+    // El audio de la PC solo con wf-recorder: grim va a ~10 fps irregulares y ffmpeg frenaría el audio.
+    let audio = backend === "wf-recorder" && (await probeDesktopAudio(env).catch(() => false));
+    if (active !== a) return;
+    if (backend === "grim") videoOnly(STREAM_ERRORS.noDesktopAudioGrim, "grim");
+    else if (!audio) videoOnly(STREAM_ERRORS.noDesktopAudio, "no-pipewire");
 
     const shim = createGoLiveShim({ gateway, meId: me, lib });
     a.shim = shim;
@@ -187,12 +199,20 @@ export function createGoLive(deps: {
 
     let capture: CaptureHandle;
     try {
-      capture = startCapture({ backend, encoder, monitor, quality, env });
-    } catch {
-      return void finish(a, STREAM_ERRORS.captureEnded);
+      capture = startCapture({ backend, encoder, monitor, quality, env, audio });
+    } catch (error) {
+      if (!audio) return void finish(a, STREAM_ERRORS.captureEnded);
+      log.warn("golive.audio-failed", { error_name: error instanceof Error ? error.name : "error" });
+      videoOnly(STREAM_ERRORS.noDesktopAudio, "audio-failed");
+      audio = false;
+      try {
+        capture = startCapture({ backend, encoder, monitor, quality, env });
+      } catch {
+        return void finish(a, STREAM_ERRORS.captureEnded);
+      }
     }
     a.capture = capture;
-    log.info("golive.start", { mode: `${backend}/${encoder}`, state: state.settings.streamQuality });
+    log.info("golive.start", { mode: `${backend}/${encoder}${audio ? "+audio" : ""}`, state: state.settings.streamQuality });
     if (backend === "grim") notice(GRIM_SLOW, "info");
     void capture.ended.then(() => {
       if (active === a) void finish(a, STREAM_ERRORS.captureEnded);

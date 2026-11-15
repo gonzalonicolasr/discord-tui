@@ -17,7 +17,7 @@ function textProc(text: string): ProcLike {
   return { pid: 1, stdout: new Response(text).body!, exited: Promise.resolve(0), kill() {} };
 }
 
-function setup(opts: { tools?: string[]; monitors?: unknown[]; inVoice?: boolean; session?: boolean } = {}) {
+function setup(opts: { tools?: string[]; monitors?: unknown[]; inVoice?: boolean; session?: boolean; pwDumpExit?: number; failWithAudio?: boolean } = {}) {
   const store = createStore(emptyState());
   store.dispatch({
     type: "gw",
@@ -29,7 +29,7 @@ function setup(opts: { tools?: string[]; monitors?: unknown[]; inVoice?: boolean
   });
   const gw = fakeGateway();
   const fake = fakeGoLiveLib();
-  const capture = fakeCapture();
+  const capture = fakeCapture({ failWithAudio: opts.failWithAudio });
   const tools = new Set(opts.tools ?? ["wf-recorder", "grim", "hyprctl"]);
   const spawned: string[][] = [];
   const env: CaptureEnv = {
@@ -37,6 +37,7 @@ function setup(opts: { tools?: string[]; monitors?: unknown[]; inVoice?: boolean
     exists: () => false,
     spawn: (cmd) => {
       spawned.push(cmd);
+      if (cmd[0] === "pw-dump") return { ...textProc("[]"), exited: Promise.resolve(opts.pwDumpExit ?? 0) };
       return textProc(JSON.stringify(opts.monitors ?? [{ name: "DP-1", width: 1920, height: 1080, focused: false }, { name: "HDMI-A-1", width: 1920, height: 1080, focused: true }]));
     },
   };
@@ -72,7 +73,7 @@ describe("start", () => {
     expect(s.gw.sent.map((x) => x.op)).toEqual([18, 22]);
     expect(s.gw.sent[1]!.d).toEqual({ stream_key: KEY, paused: false });
     expect(s.fake.streamers[0]._voiceConnection.session_id).toBe("voice-session-1");
-    expect(s.capture.started).toEqual([{ backend: "wf-recorder", encoder: "nvenc", monitor: "DP-1", quality: { width: 1280, height: 720, fps: 30, bitrateK: 2500, maxrateK: 3500 } }]);
+    expect(s.capture.started).toEqual([{ backend: "wf-recorder", encoder: "nvenc", monitor: "DP-1", quality: { width: 1280, height: 720, fps: 30, bitrateK: 2500, maxrateK: 3500 }, audio: false }]);
     expect(s.fake.plays[0]!.options).toEqual({ type: "go-live", format: "nut" });
     await s.fake.ready();
     expect(s.stream().status).toBe("live");
@@ -133,6 +134,50 @@ describe("start", () => {
     expect(s.stream()).toMatchObject({ status: "error", error: STREAM_ERRORS.noResponse });
     expect(s.gw.sent.map((x) => x.op)).toEqual([18, 22, 19]);
     expect(s.capture.stops()).toBe(1);
+  });
+});
+
+describe("PC audio", () => {
+  const PIPEWIRE = ["wf-recorder", "grim", "hyprctl", "pw-record", "pw-link", "pw-dump"];
+
+  test("with PipeWire the capture carries the PC audio, and no warning is shown", async () => {
+    const s = setup({ tools: PIPEWIRE });
+    await s.golive.start("DP-1");
+    expect(s.capture.started[0]).toMatchObject({ backend: "wf-recorder", audio: true });
+    expect(s.spawned).toContainEqual(["pw-dump"]);
+    expect(s.notices().some((t) => t.includes("audio"))).toBe(false);
+  });
+
+  test("without the PipeWire tools: video only, as before, with a notice", async () => {
+    const s = setup();
+    await s.golive.start("DP-1");
+    expect(s.capture.started[0]!.audio).toBe(false);
+    expect(s.notices()).toContain(STREAM_ERRORS.noDesktopAudio);
+    await s.fake.ready();
+    expect(s.stream().status).toBe("live");
+  });
+
+  test("PipeWire not answering (pw-dump fails): video only with a notice", async () => {
+    const s = setup({ tools: PIPEWIRE, pwDumpExit: 255 });
+    await s.golive.start("DP-1");
+    expect(s.capture.started[0]!.audio).toBe(false);
+    expect(s.notices()).toContain(STREAM_ERRORS.noDesktopAudio);
+  });
+
+  test("the audio capture cannot start: retries video only and keeps streaming", async () => {
+    const s = setup({ tools: PIPEWIRE, failWithAudio: true });
+    await s.golive.start("DP-1");
+    expect(s.capture.started.map((c) => c.audio)).toEqual([true, false]);
+    expect(s.notices()).toContain(STREAM_ERRORS.noDesktopAudio);
+    await s.fake.ready();
+    expect(s.stream().status).toBe("live");
+  });
+
+  test("grim (the slow fallback) goes without audio and says so", async () => {
+    const s = setup({ tools: ["grim", "pw-record", "pw-link", "pw-dump"] });
+    await s.golive.start();
+    expect(s.capture.started[0]).toMatchObject({ backend: "grim", audio: false });
+    expect(s.notices()).toContain(STREAM_ERRORS.noDesktopAudioGrim);
   });
 });
 
