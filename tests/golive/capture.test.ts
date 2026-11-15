@@ -271,10 +271,10 @@ describe("process cleanup (real processes standing in for wf-recorder / grim / f
   });
 
   /** Stand-ins con audio: nada graba pantalla ni audio (sleep/cat/true/echo). */
-  function audioStandIns(recorder: string[]) {
+  function audioStandIns(recorder: string[], wf: string[] = ["sh", "-c", "exec sleep 30"]) {
     const opts: Record<string, SpawnOpts> = {};
     const { env, spawned } = standIns((cmd) => {
-      if (cmd[0] === "wf-recorder") return ["sh", "-c", "exec sleep 30"];
+      if (cmd[0] === "wf-recorder") return wf;
       if (cmd[0] === "pw-record") return recorder;
       if (cmd[0] === "pw-dump") return ["echo", "[]"];
       if (cmd[0] === "pw-link") return ["true"];
@@ -317,6 +317,47 @@ describe("process cleanup (real processes standing in for wf-recorder / grim / f
     await handle.stop();
     await Bun.sleep(20);
     expect(spawned.filter((s) => alive(s.pid))).toEqual([]);
+  });
+
+  const PRINTS = ["sh", "-c", "printf hola; exec sleep 30"];
+
+  test("audioReady: true once ffmpeg has output and pw-record lived through the grace period; the bytes still reach the output", async () => {
+    const { env } = audioStandIns(["sh", "-c", "exec sleep 30"], PRINTS);
+    const handle = startCapture({ backend: "wf-recorder", encoder: "x264", monitor: "", quality: QUALITY["720p30"], env, audio: true, audioGraceMs: 100, audioTimeoutMs: 2_000 });
+    expect(await handle.audioReady).toBe(true);
+    let text = "";
+    handle.output.on("data", (chunk: Buffer) => (text += chunk.toString()));
+    await Bun.sleep(30);
+    expect(text).toBe("hola");
+    await handle.stop();
+  });
+
+  test("audioReady: false when pw-record dies in the first seconds", async () => {
+    const { env } = audioStandIns(["sh", "-c", "sleep 0.05"], PRINTS);
+    const handle = startCapture({ backend: "wf-recorder", encoder: "x264", monitor: "", quality: QUALITY["720p30"], env, audio: true, audioGraceMs: 300, audioTimeoutMs: 2_000 });
+    expect(await handle.audioReady).toBe(false);
+    await handle.stop();
+  });
+
+  test("audioReady: false when no video comes out in time", async () => {
+    const { env } = audioStandIns(["sh", "-c", "exec sleep 30"]);
+    const handle = startCapture({ backend: "wf-recorder", encoder: "x264", monitor: "", quality: QUALITY["720p30"], env, audio: true, audioGraceMs: 50, audioTimeoutMs: 200 });
+    expect(await handle.audioReady).toBe(false);
+    await handle.stop();
+  });
+
+  test("audioReady: false when ffmpeg with audio dies in the first seconds", async () => {
+    const { env } = standIns((cmd) => (cmd[0] === "ffmpeg" ? ["sh", "-c", "exit 1"] : cmd[0] === "pw-dump" ? ["echo", "[]"] : ["sh", "-c", "exec sleep 30"]));
+    const handle = startCapture({ backend: "wf-recorder", encoder: "x264", monitor: "", quality: QUALITY["720p30"], env, audio: true, audioGraceMs: 300, audioTimeoutMs: 2_000 });
+    expect(await handle.audioReady).toBe(false);
+    await handle.stop();
+  });
+
+  test("video only: audioReady is true right away", async () => {
+    const { env } = audioStandIns(["sh", "-c", "exec sleep 30"]);
+    const handle = startCapture({ backend: "wf-recorder", encoder: "x264", monitor: "", quality: QUALITY["720p30"], env });
+    expect(await Promise.race([handle.audioReady, Bun.sleep(20).then(() => "late")])).toBe(true);
+    await handle.stop();
   });
 
   test("without audio nothing PipeWire is spawned and ffmpeg gets no fd 3", async () => {

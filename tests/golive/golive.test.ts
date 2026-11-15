@@ -17,7 +17,7 @@ function textProc(text: string): ProcLike {
   return { pid: 1, stdout: new Response(text).body!, exited: Promise.resolve(0), kill() {} };
 }
 
-function setup(opts: { tools?: string[]; monitors?: unknown[]; inVoice?: boolean; session?: boolean; pwDumpExit?: number; failWithAudio?: boolean } = {}) {
+function setup(opts: { tools?: string[]; monitors?: unknown[]; inVoice?: boolean; session?: boolean; pwDumpExit?: number; failWithAudio?: boolean; audioReady?: Promise<boolean> | boolean } = {}) {
   const store = createStore(emptyState());
   store.dispatch({
     type: "gw",
@@ -29,7 +29,7 @@ function setup(opts: { tools?: string[]; monitors?: unknown[]; inVoice?: boolean
   });
   const gw = fakeGateway();
   const fake = fakeGoLiveLib();
-  const capture = fakeCapture({ failWithAudio: opts.failWithAudio });
+  const capture = fakeCapture({ failWithAudio: opts.failWithAudio, audioReady: opts.audioReady });
   const tools = new Set(opts.tools ?? ["wf-recorder", "grim", "hyprctl"]);
   const spawned: string[][] = [];
   const env: CaptureEnv = {
@@ -171,6 +171,49 @@ describe("PC audio", () => {
     expect(s.notices()).toContain(STREAM_ERRORS.noDesktopAudio);
     await s.fake.ready();
     expect(s.stream().status).toBe("live");
+  });
+
+  test("the audio dies or no video comes out in the first seconds: restarts video only, without cutting the stream", async () => {
+    const s = setup({ tools: PIPEWIRE, audioReady: false });
+    await s.golive.start("DP-1");
+    expect(s.capture.started.map((c) => c.audio)).toEqual([true, false]);
+    expect(s.capture.stops()).toBe(1); // la captura con audio, no la de solo video
+    expect(s.notices()).toContain(STREAM_ERRORS.noDesktopAudio);
+    expect(s.fake.plays.length).toBe(1);
+    await s.fake.ready();
+    expect(s.stream().status).toBe("live");
+    expect(s.gw.sent.filter((x) => x.op === 18).length).toBe(1);
+    expect(s.gw.sent.some((x) => x.op === 19)).toBe(false);
+  });
+
+  test("Discord is asked for the stream while the audio is on probation; the media starts after", async () => {
+    let pass!: (ok: boolean) => void;
+    const s = setup({ tools: PIPEWIRE, audioReady: new Promise<boolean>((resolve) => (pass = resolve)) });
+    const starting = s.golive.start("DP-1");
+    await Bun.sleep(5);
+    expect(s.gw.sent.map((x) => x.op)).toEqual([18, 22]);
+    expect(s.fake.plays.length).toBe(0);
+    pass(true);
+    await starting;
+    expect(s.fake.plays.length).toBe(1);
+    await s.fake.ready();
+    expect(s.stream().status).toBe("live");
+    expect(s.gw.sent.filter((x) => x.op === 18).length).toBe(1);
+    expect(s.capture.started.map((c) => c.audio)).toEqual([true]);
+  });
+
+  test("stopping during the audio probation leaves nothing running", async () => {
+    let pass!: (ok: boolean) => void;
+    const s = setup({ tools: PIPEWIRE, audioReady: new Promise<boolean>((resolve) => (pass = resolve)) });
+    const starting = s.golive.start("DP-1");
+    await Bun.sleep(5);
+    await s.golive.stop();
+    pass(false);
+    await starting;
+    expect(s.capture.started.length).toBe(1);
+    expect(s.capture.stops()).toBe(1);
+    expect(s.fake.plays.length).toBe(0);
+    expect(s.stream().status).toBe("idle");
   });
 
   test("grim (the slow fallback) goes without audio and says so", async () => {

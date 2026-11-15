@@ -78,7 +78,7 @@ export function fakeGoLiveLib() {
   };
 }
 
-export function fakeCapture(opts: { failWithAudio?: boolean } = {}) {
+export function fakeCapture(opts: { failWithAudio?: boolean; audioReady?: Promise<boolean> | boolean } = {}) {
   const started: Array<{ backend: string; encoder: string; monitor: string; quality: unknown; audio: boolean }> = [];
   let stops = 0;
   let endFns: Array<() => void> = [];
@@ -89,6 +89,7 @@ export function fakeCapture(opts: { failWithAudio?: boolean } = {}) {
     let alive = true;
     return {
       output: Readable.from([]),
+      audioReady: audio ? Promise.resolve(opts.audioReady ?? true) : Promise.resolve(true),
       ended: new Promise<void>((resolve) => endFns.push(resolve)),
       pids: () => (alive ? [1] : []),
       stop: async () => {

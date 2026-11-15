@@ -115,11 +115,15 @@ export function createGoLive(deps: {
     return `no se pudo transmitir (${error instanceof Error ? error.name : "error"})`;
   }
 
-  /** createStream() con timeout, corte por abort y aviso de "en vivo" + vigilancia del WS del stream. */
+  /**
+   * createStream() con timeout, corte por abort y aviso de "en vivo" + vigilancia del WS del stream. Una sola vez
+   * por transmisión: con audio se pide antes (mientras se prueba la captura) y playStream recibe el mismo.
+   */
   function wrapCreateStream(a: Active, streamer: any): void {
     const original = streamer.createStream.bind(streamer);
+    let created: Promise<unknown> | null = null;
     streamer.createStream = (): Promise<unknown> =>
-      new Promise((resolve, reject) => {
+      (created ??= new Promise((resolve, reject) => {
         const timer = setTimeout(() => reject(new GoLiveError(STREAM_ERRORS.noResponse)), deps.createTimeoutMs ?? CREATE_TIMEOUT_MS);
         a.abort.signal.addEventListener("abort", () => (clearTimeout(timer), reject(new GoLiveError("cortado"))), { once: true });
         Promise.resolve()
@@ -144,7 +148,7 @@ export function createGoLive(deps: {
               reject(error);
             },
           );
-      });
+      }));
   }
 
   async function startNow(monitorArg?: string | null): Promise<void> {
@@ -212,6 +216,26 @@ export function createGoLive(deps: {
       }
     }
     a.capture = capture;
+    if (audio) {
+      // Mientras Discord arma el stream, se prueba el audio: si pw-record o ffmpeg mueren en los primeros
+      // segundos, o no sale video, se vuelve a capturar solo con video (la transmisión no se corta por el audio).
+      shim.streamer.createStream().catch(() => {});
+      const ok = await capture.audioReady.catch(() => false);
+      if (active !== a) return;
+      if (!ok) {
+        videoOnly(STREAM_ERRORS.noDesktopAudio, "audio-early-exit");
+        a.capture = null;
+        await capture.stop().catch(() => {});
+        if (active !== a) return;
+        audio = false;
+        try {
+          capture = startCapture({ backend, encoder, monitor, quality, env });
+        } catch {
+          return void finish(a, STREAM_ERRORS.captureEnded);
+        }
+        a.capture = capture;
+      }
+    }
     log.info("golive.start", { mode: `${backend}/${encoder}${audio ? "+audio" : ""}`, state: state.settings.streamQuality });
     if (backend === "grim") notice(GRIM_SLOW, "info");
     void capture.ended.then(() => {

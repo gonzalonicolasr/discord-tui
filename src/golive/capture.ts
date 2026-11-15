@@ -307,6 +307,12 @@ export interface CaptureHandle {
   readonly output: Readable;
   /** Resuelve cuando la captura termina sola (no por `stop()`). */
   readonly ended: Promise<void>;
+  /**
+   * Con audio: true si en los primeros segundos ffmpeg sacó datos (hubo video) y pw-record y ffmpeg siguieron
+   * vivos; false si alguno murió o no salió nada a tiempo (el que llama reintenta solo con video). Sin audio:
+   * true enseguida.
+   */
+  readonly audioReady: Promise<boolean>;
   /** Pids vivos de la captura (para tests y diagnóstico). */
   pids(): number[];
   /** Mata todo y espera a que salga. Idempotente. */
@@ -314,6 +320,10 @@ export interface CaptureHandle {
 }
 
 const KILL_GRACE_MS = 1_500;
+/** Cuánto tienen que durar vivos pw-record y ffmpeg con audio antes de dar la captura por buena. */
+export const AUDIO_GRACE_MS = 1_500;
+/** Hasta cuándo se espera el primer dato de ffmpeg con audio (si no, no hay video: se reintenta sin audio). */
+export const AUDIO_TIMEOUT_MS = 4_000;
 
 async function killAndWait(proc: ProcLike): Promise<void> {
   if (proc.exitCode !== undefined && proc.exitCode !== null) return;
@@ -357,6 +367,42 @@ function tailStderr(proc: ProcLike): { text(): string } {
   return { text: () => tail.trim() };
 }
 
+/** Un ReadableStream que pasa lo mismo que `source` y avisa con el primer chunk. */
+function watchFirstChunk(source: ReadableStream<Uint8Array>, onFirst: () => void): ReadableStream<Uint8Array> {
+  const reader = source.getReader();
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (done) return controller.close();
+        onFirst();
+        controller.enqueue(value);
+      } catch (error) {
+        controller.error(error);
+      }
+    },
+    cancel: (reason) => reader.cancel(reason),
+  });
+}
+
+/** true si llega el primer dato y los procesos siguen vivos pasado `graceMs`; false si alguno muere o se pasa el tiempo. */
+function audioProbation(opts: { firstOutput: Promise<void>; procs: ProcLike[]; graceMs: number; timeoutMs: number }): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    let done = false;
+    const timers: Array<ReturnType<typeof setTimeout>> = [];
+    const finish = (ok: boolean): void => {
+      if (done) return;
+      done = true;
+      timers.forEach(clearTimeout);
+      resolve(ok);
+    };
+    for (const proc of opts.procs) void proc.exited.then(() => finish(false), () => finish(false));
+    timers.push(setTimeout(() => finish(false), opts.timeoutMs));
+    const grace = new Promise<void>((r) => timers.push(setTimeout(r, opts.graceMs)));
+    void Promise.all([opts.firstOutput, grace]).then(() => finish(true));
+  });
+}
+
 /**
  * Arranca captura → ffmpeg. Con wf-recorder el stdout de la captura va directo al stdin de ffmpeg; con
  * grim se saca un frame por vez en JS (un proceso `grim` corto por frame) y se escribe en ffmpeg.
@@ -370,6 +416,8 @@ export function startCapture(opts: {
   quality: Quality;
   env?: CaptureEnv;
   audio?: boolean;
+  audioGraceMs?: number;
+  audioTimeoutMs?: number;
 }): CaptureHandle {
   const env = opts.env ?? defaultCaptureEnv;
   if (!isValidMonitorName(opts.monitor)) throw new Error("monitor inválido");
@@ -478,10 +526,13 @@ export function startCapture(opts: {
   }
 
   const stderr = tailStderr(ffmpeg);
-  const output =
-    ffmpeg.stdout && typeof ffmpeg.stdout !== "number"
-      ? Readable.fromWeb(ffmpeg.stdout as unknown as import("node:stream/web").ReadableStream<Uint8Array>)
-      : Readable.from([]);
+  const ffOut = ffmpeg.stdout && typeof ffmpeg.stdout !== "number" ? ffmpeg.stdout : null;
+  let markFirstOutput = (): void => {};
+  const firstOutput = new Promise<void>((resolve) => (markFirstOutput = resolve));
+  // Con audio se mira el primer dato sin perderlo: el ReadableStream pide un chunk apenas se crea (y lo guarda
+  // para el que lea después). Sin audio, como siempre.
+  const web = ffOut && audio ? watchFirstChunk(ffOut, markFirstOutput) : ffOut;
+  const output = web ? Readable.fromWeb(web as unknown as import("node:stream/web").ReadableStream<Uint8Array>) : Readable.from([]);
 
   const ended = ffmpeg.exited.then(
     (code) => {
@@ -490,9 +541,19 @@ export function startCapture(opts: {
     () => {},
   );
 
+  const audioReady = audio && recorder
+    ? audioProbation({
+        firstOutput,
+        procs: [recorder, ffmpeg],
+        graceMs: opts.audioGraceMs ?? AUDIO_GRACE_MS,
+        timeoutMs: opts.audioTimeoutMs ?? AUDIO_TIMEOUT_MS,
+      })
+    : Promise.resolve(true);
+
   let stopped: Promise<void> | null = null;
   return {
     output,
+    audioReady,
     ended: ended.then(() => {
       if (stopping) return new Promise<void>(() => {});
     }),
