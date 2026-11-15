@@ -69,6 +69,8 @@ export interface WasmOpus {
   encode(pcm: Uint8Array, frameSize: number): Uint8Array;
   decode(packet: Uint8Array): Uint8Array;
   delete(): void;
+  /** Su módulo se descartó por un trap (de este códec o de otro): hay que pasarse a uno nuevo. */
+  stale(): boolean;
 }
 
 export function createWasmOpus(channels = 2): WasmOpus {
@@ -123,6 +125,9 @@ export function createWasmOpus(channels = 2): WasmOpus {
       if (samples < 0) throw new Error(`Decode error: ${samples}`);
       const bytes = samples * channels * 2;
       return Uint8Array.from(m.HEAPU16.subarray(outPcm >> 1, (outPcm >> 1) + bytes));
+    },
+    stale(): boolean {
+      return native !== m;
     },
     delete(): void {
       if (!alive) return;

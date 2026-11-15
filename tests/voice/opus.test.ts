@@ -134,8 +134,25 @@ test("after a trap in the shared WASM module, that codec and the next ones move 
     expect(createOpusCodec({ prefer: "wasm" }).decode(Uint8Array.of(1)).length).toBe(3840);
     expect(modules).toBe(2);
     // El que estaba en el módulo roto se muda en su primer uso (también el encoder del micrófono).
-    expect(() => b.encode(new Uint8Array(3840))).toThrow(WebAssembly.RuntimeError);
     expect(b.encode(new Uint8Array(3840)).length).toBe(1);
+    expect(modules).toBe(2);
+  } finally {
+    setWasmModuleFactoryForTests(null);
+  }
+});
+
+test("codecs on a dropped WASM module move too even if that module answers with errors instead of trapping", () => {
+  let modules = 0;
+  setWasmModuleFactoryForTests(() => {
+    modules += 1;
+    return fakeOpusModule({ trapOn: 0xee, brokenReturns: -4 });
+  });
+  try {
+    const a = createOpusCodec({ prefer: "wasm" });
+    const b = createOpusCodec({ prefer: "wasm" });
+    expect(() => a.decode(Uint8Array.of(0xee))).toThrow(WebAssembly.RuntimeError);
+    // b no trapeó, pero su módulo ya no es confiable: se muda antes de decodificar y no pierde nada.
+    expect(b.decode(Uint8Array.of(1)).length).toBe(3840);
     expect(modules).toBe(2);
   } finally {
     setWasmModuleFactoryForTests(null);

@@ -1,9 +1,10 @@
 /**
  * Módulo "opusscript WASM" de mentira para probar qué pasa cuando el de verdad trapea: el paquete `trapOn` hace
  * tirar un `WebAssembly.RuntimeError` y desde ahí todo el módulo queda roto (como uno real con el heap pisado).
+ * Con `brokenReturns`, el módulo roto no trapea más: `_decode` devuelve ese error (como un heap pisado que da -4).
  * Decodifica cualquier otro paquete a 20 ms de PCM con todos los bytes en 0x11.
  */
-export function fakeOpusModule(opts: { trapOn: number }) {
+export function fakeOpusModule(opts: { trapOn: number; /** Roto, devuelve este código de error en vez de trapear. */ brokenReturns?: number }) {
   const memory = new ArrayBuffer(1 << 20);
   let next = 8;
   let broken = false;
@@ -12,7 +13,7 @@ export function fakeOpusModule(opts: { trapOn: number }) {
     throw new WebAssembly.RuntimeError("Out of bounds memory access");
   };
   const guard = (): void => {
-    if (broken) trap();
+    if (broken && opts.brokenReturns === undefined) trap();
   };
   const m = {
     HEAPU8: new Uint8Array(memory),
@@ -38,6 +39,7 @@ export function fakeOpusModule(opts: { trapOn: number }) {
       }
       _decode(inPtr: number, _length: number, outPtr: number): number {
         guard();
+        if (broken) return opts.brokenReturns!;
         if (m.HEAPU8[inPtr] === opts.trapOn) trap();
         for (let i = 0; i < 960 * 2 * 2; i += 1) m.HEAPU16[(outPtr >> 1) + i] = 0x11;
         return 960;

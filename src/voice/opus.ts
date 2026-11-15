@@ -23,6 +23,7 @@ interface WasmOpus {
   encode(buffer: Buffer, frameSize: number): Buffer;
   decode(buffer: Buffer): Buffer;
   delete(): void;
+  stale(): boolean;
 }
 
 function loadNative(): NativeOpus | null {
@@ -50,6 +51,7 @@ function loadWasm(): WasmOpus | null {
       encode: (buffer, frameSize) => Buffer.from(codec.encode(buffer, frameSize)),
       decode: (buffer) => Buffer.from(codec.decode(buffer)),
       delete: () => codec.delete(),
+      stale: () => codec.stale(),
     };
   } catch (error) {
     lastLoadError = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
@@ -84,18 +86,26 @@ export function createOpusCodec(opts?: { prefer?: "native" | "wasm" }): OpusCode
    * El módulo WASM es uno para todos los códecs: si trapea queda roto (y los decoders de todos y el encoder del mic
    * fallarían hasta cerrar zcord). Ese paquete se pierde, pero el códec sigue en un módulo nuevo (estado de cero).
    */
+  function moveToFreshModule(): void {
+    const fresh = loadWasm();
+    log.warn("voice.codec-reset", { error_name: "RuntimeError", state: fresh ? "recreated" : "failed" });
+    if (fresh) opus = fresh;
+  }
+
   function recover(error: unknown): never {
-    if (which === "wasm" && isWasmTrap(error)) {
-      const fresh = loadWasm();
-      log.warn("voice.codec-reset", { error_name: "RuntimeError", state: fresh ? "recreated" : "failed" });
-      if (fresh) opus = fresh;
-    }
+    if (which === "wasm" && isWasmTrap(error)) moveToFreshModule();
     throw error;
+  }
+
+  /** Un módulo con el heap pisado no siempre trapea (puede devolver errores): si otro códec lo descartó, mudarse ya. */
+  function checkModule(): void {
+    if (which === "wasm" && (opus as WasmOpus).stale()) moveToFreshModule();
   }
 
   return {
     backend: which,
     encode(pcm: Uint8Array): Uint8Array {
+      checkModule();
       try {
         const out = opus.encode(Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength), FRAME_SAMPLES);
         return new Uint8Array(out);
@@ -108,6 +118,7 @@ export function createOpusCodec(opts?: { prefer?: "native" | "wasm" }): OpusCode
     },
     decode(opusPacket: Uint8Array): Uint8Array {
       const input = Buffer.from(opusPacket.buffer, opusPacket.byteOffset, opusPacket.byteLength);
+      checkModule();
       try {
         const out = which === "native" ? (opus as NativeOpus).decode(input, FRAME_SAMPLES) : (opus as WasmOpus).decode(input);
         return new Uint8Array(out);
