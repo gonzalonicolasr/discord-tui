@@ -128,6 +128,37 @@ test("a box with a background opened over the stream is cut out of the video, an
   expect(marks[3]).toEqual(marks[0]!); // cerrado: entera otra vez
 });
 
+test("the stream follows its box when the terminal is resized and when the panel next to it changes width", async () => {
+  const [side, setSide] = createSignal(30);
+  await same(
+    (viewer) => (
+      <box flexDirection="row" width="100%" height="100%">
+        <box width={side()} flexShrink={0}>
+          <text>canales</text>
+        </box>
+        {viewer()}
+      </box>
+    ),
+    async (h, frame, mark) => {
+      setSide(30);
+      for (let i = 0; i < 3; i++) await frame();
+      mark();
+      setSide(50); // se mueve y se achica sin cuadro nuevo
+      await settle(h);
+      mark();
+      h.resize(90, 30);
+      await settle(h);
+      mark();
+      await frame();
+      mark();
+      h.resize(COLS, ROWS);
+      await settle(h);
+      await frame();
+      mark();
+    },
+  );
+});
+
 /** La App de verdad mirando la transmisión de la demo, con los overlays reales (ayuda con ?, Ctrl+K). */
 async function appScene(fileOk: boolean) {
   const term = fakeKittyTerminal({ cols: COLS, rows: ROWS, fileOk });
