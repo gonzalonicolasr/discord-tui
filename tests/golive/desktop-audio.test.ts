@@ -184,7 +184,7 @@ function textProc(text: string, code = 0): ProcLike {
   return { pid: 1, stdout: new Response(text).body!, exited: Promise.resolve(code), kill() {} };
 }
 
-function fakeEnv(opts: { tools?: string[]; dump?: string; dumpExit?: number } = {}) {
+function fakeEnv(opts: { tools?: string[]; dump?: string; dumpExit?: number; linkExit?: number } = {}) {
   const tools = new Set(opts.tools ?? ["pw-record", "pw-link", "pw-dump"]);
   const spawned: Array<{ cmd: string[]; opts: SpawnOpts }> = [];
   const env: CaptureEnv = {
@@ -193,6 +193,7 @@ function fakeEnv(opts: { tools?: string[]; dump?: string; dumpExit?: number } = 
     spawn: (cmd, spawnOpts) => {
       spawned.push({ cmd, opts: spawnOpts });
       if (cmd[0] === "pw-dump") return textProc(opts.dump ?? JSON.stringify(dump()), opts.dumpExit ?? 0);
+      if (cmd[0] === "pw-link") return textProc("", opts.linkExit ?? 0);
       return textProc("");
     },
   };
@@ -255,6 +256,17 @@ describe("audio linker", () => {
     await Bun.sleep(50);
     await expect(linker.stop()).resolves.toBeUndefined();
     expect(spawned.filter((s) => s.cmd[0] === "pw-dump").length).toBeGreaterThan(1);
+  });
+
+  test("a pair that pw-link keeps refusing is given up after 3 tries (no new process every second forever)", async () => {
+    const { env, spawned } = fakeEnv({ linkExit: 1 });
+    const linker = startAudioLinker({ env, recorderPid: RECORDER_PID, isOwn, intervalMs: 5 });
+    await Bun.sleep(150);
+    await linker.stop();
+    const tries = (args: string[]) => spawned.filter((s) => s.cmd.join(" ") === ["pw-link", ...args].join(" ")).length;
+    expect(spawned.filter((s) => s.cmd[0] === "pw-dump").length).toBeGreaterThan(5);
+    expect(tries(["202", "102"])).toBe(3);
+    expect(tries(["-d", "301", "101"])).toBe(3);
   });
 
   test("a broken pw-dump does not stop the polling nor throw", async () => {

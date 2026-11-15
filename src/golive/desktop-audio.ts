@@ -24,6 +24,9 @@ export const AUDIO_NODE = "zcord-golive-audio";
 /** Cada cuánto se miran las apps nuevas que empiezan a sonar. */
 export const LINK_INTERVAL_MS = 1_000;
 
+/** Veces que se prueba un mismo enlace (o desenlace) que pw-link rechaza antes de dejarlo. */
+export const MAX_LINK_TRIES = 3;
+
 /** Apps cuyo audio es una mezcla de TODO lo que suena (zcord incluido): enlazarlas sería eco. */
 const MIXERS = new Set(["pipewire", "pipewire-pulse", "wireplumber", "easyeffects"]);
 
@@ -212,6 +215,22 @@ export function startAudioLinker(opts: {
   let wake: (() => void) | null = null;
   let warned = false;
 
+  /** Pares que pw-link rechazó, y cuántas veces. */
+  const refused = new Map<string, number>();
+  let gaveUp = false;
+  const pwLink = async (args: string[]): Promise<void> => {
+    const key = args.join(" ");
+    if ((refused.get(key) ?? 0) >= MAX_LINK_TRIES) return;
+    const result = await runText(opts.env, ["pw-link", ...args], 2_000).catch(() => null);
+    if (result?.code === 0) return void refused.delete(key);
+    const tries = (refused.get(key) ?? 0) + 1;
+    refused.set(key, tries);
+    if (tries >= MAX_LINK_TRIES && !gaveUp) {
+      gaveUp = true;
+      log.warn("golive.audio-link-refused", { count: tries });
+    }
+  };
+
   /** Una vuelta: leer el grafo, deshacer lo que no va y enlazar lo que falta. */
   const pass = async (): Promise<void> => {
     const dump = await readDump(opts.env, 2_000);
@@ -224,12 +243,12 @@ export function startAudioLinker(opts: {
     const plan = { recorderPid: opts.recorderPid, isOwn };
     for (const [out, input] of planUnlinks(dump, plan)) {
       if (stopped) return;
-      await runText(opts.env, ["pw-link", "-d", String(out), String(input)], 2_000).catch(() => null);
+      await pwLink(["-d", String(out), String(input)]);
     }
     for (const [out, input] of planLinks(dump, plan)) {
       if (stopped) return;
       // Sin `-L` igual queda (linger es el default de pw-link): muere con el nodo de pw-record.
-      await runText(opts.env, ["pw-link", String(out), String(input)], 2_000).catch(() => null);
+      await pwLink([String(out), String(input)]);
     }
   };
 
