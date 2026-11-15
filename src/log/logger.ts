@@ -29,6 +29,7 @@ export const ALLOWED_FIELDS = [
   "ref_db",
   "underruns",
   "jitter_drops",
+  "jitter_ms_max",
   "arrival_p95_ms",
   "arrival_max_ms",
   "late_ticks",

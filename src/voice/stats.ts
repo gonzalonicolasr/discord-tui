@@ -4,6 +4,7 @@ import type { AllowedField, Logger } from "../log/logger";
 export interface VoiceDiagnostics {
   underruns?: number;
   jitterDrops?: number;
+  jitterMsMax?: number;
   arrivalP95Ms?: number;
   arrivalMaxMs?: number;
   lateTicks?: number;
@@ -16,6 +17,7 @@ export interface VoiceDiagnostics {
 const DIAGNOSTIC_FIELDS: Record<keyof VoiceDiagnostics, AllowedField> = {
   underruns: "underruns",
   jitterDrops: "jitter_drops",
+  jitterMsMax: "jitter_ms_max",
   arrivalP95Ms: "arrival_p95_ms",
   arrivalMaxMs: "arrival_max_ms",
   lateTicks: "late_ticks",
