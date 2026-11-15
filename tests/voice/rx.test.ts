@@ -166,3 +166,76 @@ test("diagnostic: compares the decoded level with a reference decoder for the fi
   expect(Math.round(rx.stats().peakDb)).toBe(-50);
   expect(rx.stats().peakDb).toBe(-96);
 });
+
+function clockHarness(opts: { failCreate?: (attempt: number) => boolean; reference?: boolean } = {}) {
+  const opusListeners = new Set<(userId: string, opus: Uint8Array) => void>();
+  let clock = 0;
+  let created = 0;
+  let destroyed = 0;
+  let refsCreated = 0;
+  let refsDestroyed = 0;
+  const errors: [unknown, number][] = [];
+  const pushed: string[] = [];
+  const rx = createReceiver({
+    session: { onOpus: (fn) => (opusListeners.add(fn), () => opusListeners.delete(fn)), onSpeaking: () => () => {} },
+    mixer: { buffer: (userId) => ({ push: () => void pushed.push(userId), pop: () => null, size: 0, reset: () => {} }), remove: () => {} },
+    makeDecoder: () => {
+      created += 1;
+      if (opts.failCreate?.(created)) throw new Error("no pude cargar Opus");
+      return { decode: (o: Uint8Array) => o, destroy: () => void (destroyed += 1) };
+    },
+    ...(opts.reference
+      ? {
+          referenceDecoder: () => {
+            refsCreated += 1;
+            return { decode: (o: Uint8Array) => o, destroy: () => void (refsDestroyed += 1) };
+          },
+          onDecoderCheck: () => {},
+        }
+      : {}),
+    isDeaf: () => false,
+    onSpeaking: () => {},
+    onDecoderError: (e) => void errors.push([e, 0]),
+    now: () => clock,
+    setTimer: (() => 0) as never,
+    clearTimer: (() => {}) as never,
+  });
+  return {
+    rx,
+    errors,
+    pushed,
+    send: (userId: string) => opusListeners.forEach((fn) => fn(userId, Uint8Array.of(1, 2, 3, 4))),
+    advance: (ms: number) => void (clock += ms),
+    counts: () => ({ created, destroyed, refsCreated, refsDestroyed }),
+  };
+}
+
+test("the decoder of someone who stopped talking a long time ago (or left the channel) is freed during the call", () => {
+  const h = clockHarness();
+  h.send("gone");
+  h.send("talker");
+  expect(h.rx.stats().usersActive).toBe(2);
+  // "gone" no manda nada más; "talker" sigue hablando de a ratos.
+  for (let minute = 0; minute < 3; minute += 1) {
+    h.advance(60_000);
+    h.send("talker");
+  }
+  expect(h.counts().destroyed).toBe(1);
+  expect(h.rx.stats().usersActive).toBe(1);
+  // Si vuelve, se le crea un decoder nuevo y se lo escucha.
+  h.send("gone");
+  expect(h.counts().created).toBe(3);
+  expect(h.pushed.filter((u) => u === "gone")).toHaveLength(2);
+});
+
+test("stopping the receiver frees the reference decoders that had not finished their 50 packets", () => {
+  const h = clockHarness({ reference: true });
+  for (let i = 0; i < 10; i += 1) {
+    h.send("a");
+    h.send("b");
+  }
+  expect(h.counts().refsCreated).toBe(2);
+  h.rx.stop();
+  expect(h.counts().refsDestroyed).toBe(2);
+  expect(h.counts().destroyed).toBe(2);
+});

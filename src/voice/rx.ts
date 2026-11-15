@@ -20,6 +20,9 @@ function isSilence(opus: Uint8Array): boolean {
 
 const SILENCE_END = 5;
 const SPEAKING_TIMEOUT_MS = 300;
+/** Sin hablar este rato (o se fue del canal): se libera su decoder; si vuelve se crea otro. */
+const IDLE_DECODER_MS = 2 * 60_000;
+const IDLE_SWEEP_MS = 10_000;
 
 /**
  * Opus de cada participante → un decoder por usuario → jitter buffer del mixer.
@@ -50,6 +53,9 @@ export function createReceiver(deps: {
   const decoders = new Map<string, { decode(opus: Uint8Array): Uint8Array; destroy?(): void }>();
   /** userId → hasta cuándo no reintentar crear su decoder (no reintentar en cada paquete). */
   const failedUntil = new Map<string, number>();
+  /** userId → último paquete con voz (para liberar los decoders de los que ya no hablan). */
+  const lastHeard = new Map<string, number>();
+  let lastSweep = now();
   const silenceRun = new Map<string, number>();
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
   const speaking = new Set<string>();
@@ -78,8 +84,16 @@ export function createReceiver(deps: {
     );
   }
 
+  function freeIdleDecoders(at: number): void {
+    if (at - lastSweep < IDLE_SWEEP_MS) return;
+    lastSweep = at;
+    for (const [userId, heard] of lastHeard) if (at - heard >= IDLE_DECODER_MS) removeUser(userId);
+  }
+
   const offOpus = deps.session.onOpus((userId, opus) => {
     packets += 1;
+    const at = now();
+    freeIdleDecoders(at);
     if (isSilence(opus)) {
       const run = (silenceRun.get(userId) ?? 0) + 1;
       silenceRun.set(userId, run);
@@ -93,18 +107,19 @@ export function createReceiver(deps: {
 
     let decoder = decoders.get(userId);
     if (!decoder) {
-      if ((failedUntil.get(userId) ?? 0) > now()) return;
+      if ((failedUntil.get(userId) ?? 0) > at) return;
       try {
         decoder = deps.makeDecoder();
       } catch (error) {
         decodeErrors += 1;
-        failedUntil.set(userId, now() + 5_000);
+        failedUntil.set(userId, at + 5_000);
         deps.onDecoderError?.(error);
         return;
       }
       failedUntil.delete(userId);
       decoders.set(userId, decoder);
     }
+    lastHeard.set(userId, at);
     try {
       const pcm = decoder.decode(opus);
       deps.mixer.buffer(userId).push(pcm);
@@ -163,6 +178,7 @@ export function createReceiver(deps: {
       // ya liberado
     }
     decoders.delete(userId);
+    lastHeard.delete(userId);
     failedUntil.delete(userId);
     silenceRun.delete(userId);
     const timer = timers.get(userId);
@@ -183,6 +199,15 @@ export function createReceiver(deps: {
       offOpus();
       offSpeaking();
       for (const userId of [...decoders.keys(), ...speaking]) removeUser(userId);
+      for (const check of checks.values()) {
+        if (check.n >= CHECK_PACKETS) continue; // ese ya se liberó al terminar la comparación
+        try {
+          check.ref.destroy?.();
+        } catch {
+          // ya liberado
+        }
+      }
+      checks.clear();
       for (const timer of timers.values()) clearTimer(timer);
       timers.clear();
     },
