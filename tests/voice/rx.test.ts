@@ -195,7 +195,7 @@ function clockHarness(opts: { failCreate?: (attempt: number) => boolean; referen
       : {}),
     isDeaf: () => false,
     onSpeaking: () => {},
-    onDecoderError: (e) => void errors.push([e, 0]),
+    onDecoderError: (e, failures) => void errors.push([e, failures]),
     now: () => clock,
     setTimer: (() => 0) as never,
     clearTimer: (() => {}) as never,
@@ -238,4 +238,25 @@ test("stopping the receiver frees the reference decoders that had not finished t
   h.rx.stop();
   expect(h.counts().refsDestroyed).toBe(2);
   expect(h.counts().destroyed).toBe(2);
+});
+
+test("decoders that cannot be created are retried later, and the failures are logged at most once a minute with a count", () => {
+  let failing = true;
+  const h = clockHarness({ failCreate: () => failing });
+  const users = Array.from({ length: 20 }, (_, i) => `u${i}`);
+  // Dos minutos de 20 personas hablando con el códec roto: reintentos cada 5 s, no una línea de log por reintento.
+  for (let t = 0; t < 120_000; t += 1_000) {
+    for (const u of users) h.send(u);
+    h.advance(1_000);
+  }
+  expect(h.counts().created).toBeGreaterThan(20 * 20);
+  expect(h.errors.length).toBeLessThanOrEqual(2);
+  expect(h.errors[0]![1]).toBe(1);
+  const total = h.errors.reduce((sum, [, n]) => sum + n, 0);
+  expect(total).toBeGreaterThan(20);
+  // Cuando se puede volver a crear, todos se vuelven a escuchar.
+  failing = false;
+  h.advance(5_000);
+  for (const u of users) h.send(u);
+  for (const u of users) expect(h.pushed).toContain(u);
 });

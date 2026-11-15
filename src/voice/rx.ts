@@ -23,6 +23,8 @@ const SPEAKING_TIMEOUT_MS = 300;
 /** Sin hablar este rato (o se fue del canal): se libera su decoder; si vuelve se crea otro. */
 const IDLE_DECODER_MS = 2 * 60_000;
 const IDLE_SWEEP_MS = 10_000;
+const DECODER_RETRY_MS = 5_000;
+const DECODER_ERROR_LOG_MS = 60_000;
 
 /**
  * Opus de cada participante → un decoder por usuario → jitter buffer del mixer.
@@ -33,8 +35,8 @@ export function createReceiver(deps: {
   session: Pick<VoiceSession, "onOpus" | "onSpeaking">;
   mixer: Pick<Mixer, "buffer" | "remove">;
   makeDecoder: () => { decode(opus: Uint8Array): Uint8Array; destroy?(): void };
-  /** Si no se pudo crear un decoder (para loguear el motivo). */
-  onDecoderError?(error: unknown): void;
+  /** Si no se pudo crear un decoder (para loguear el motivo): a lo sumo una vez por minuto, con cuántos fallaron. */
+  onDecoderError?(error: unknown, failures: number): void;
   /**
    * Diagnóstico: los primeros paquetes de cada persona se decodifican también con un decoder de referencia y se
    * reporta el nivel de los dos (nunca audio), para comparar con paquetes reales de Discord.
@@ -56,6 +58,8 @@ export function createReceiver(deps: {
   /** userId → último paquete con voz (para liberar los decoders de los que ya no hablan). */
   const lastHeard = new Map<string, number>();
   let lastSweep = now();
+  let lastErrorReport = -Infinity;
+  let unreportedFailures = 0;
   const silenceRun = new Map<string, number>();
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
   const speaking = new Set<string>();
@@ -90,6 +94,15 @@ export function createReceiver(deps: {
     for (const [userId, heard] of lastHeard) if (at - heard >= IDLE_DECODER_MS) removeUser(userId);
   }
 
+  function decoderFailed(error: unknown, at: number): void {
+    unreportedFailures += 1;
+    if (at - lastErrorReport < DECODER_ERROR_LOG_MS) return;
+    lastErrorReport = at;
+    const failures = unreportedFailures;
+    unreportedFailures = 0;
+    deps.onDecoderError?.(error, failures);
+  }
+
   const offOpus = deps.session.onOpus((userId, opus) => {
     packets += 1;
     const at = now();
@@ -112,8 +125,8 @@ export function createReceiver(deps: {
         decoder = deps.makeDecoder();
       } catch (error) {
         decodeErrors += 1;
-        failedUntil.set(userId, at + 5_000);
-        deps.onDecoderError?.(error);
+        failedUntil.set(userId, at + DECODER_RETRY_MS);
+        decoderFailed(error, at);
         return;
       }
       failedUntil.delete(userId);

@@ -204,8 +204,12 @@ export function createVoiceActions(deps: {
         referenceDecoder: deps.media.createReferenceDecoder,
         onDecoderCheck: (_userId, oursDb, referenceDb, n) =>
           log.info("voice.decoder-check", { peak_db: Math.round(oursDb), ref_db: Math.round(referenceDb), count: n }),
-        onDecoderError: (error) =>
-          log.error("voice.decoder-failed", { error_name: error instanceof Error ? error.name : "unknown", msg: error instanceof Error ? error.message.slice(0, 160) : "" }),
+        onDecoderError: (error, failures) =>
+          log.error("voice.decoder-failed", {
+            error_name: error instanceof Error ? error.name : "unknown",
+            msg: error instanceof Error ? error.message.slice(0, 160) : "",
+            count: failures,
+          }),
         isDeaf: () => voice().selfDeaf,
         onSpeaking: (userId, on) => store.dispatch({ type: "voice/speaking", userId, on }),
       });
