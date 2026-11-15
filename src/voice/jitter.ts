@@ -31,9 +31,9 @@ const STABLE_POPS = 500;
  *
  * Adaptativo: cada frase nueva arranca con el colchón aprendido (de entrada `rebufferFrames`, como siempre). El
  * mixer llama a `pop()` una vez por slot de 20 ms, así que el buffer mide solo cuántos slots pasan sin paquetes a
- * mitad de una frase (la red los retuvo y los soltó juntos, o el event loop se trabó): ese hueco más un frame es el
- * colchón que hace falta, hasta 200 ms, aunque todavía no se haya vaciado. Si en 10 s de voz no hizo falta tanto,
- * baja de a un frame. Con la red pareja el hueco es de un slot: no suma latencia.
+ * mitad de una frase (la red los retuvo y los soltó juntos, o el event loop se trabó): ese hueco es el colchón que
+ * hace falta, hasta 200 ms, aunque todavía no se haya vaciado. Si en 10 s de voz no hizo falta tanto, baja de a un
+ * frame. Con la red pareja el hueco es de 1 o 2 slots (el cruce de un borde de tick): no sube del colchón de base.
  */
 export function createJitterBuffer(opts?: {
   prebufferFrames?: number;
@@ -74,8 +74,11 @@ export function createJitterBuffer(opts?: {
         starvedFor = null;
       }
       if (sincePush !== null && sincePush < UNDERRUN_SLOTS) {
-        // Pasaron `sincePush` slots sin audio: para no cortarse hace falta ese colchón y uno más.
-        const needed = Math.min(MAX_TARGET_FRAMES, sincePush + 1);
+        // Hubo `sincePush` pops entre este paquete y el anterior: para no cortarse hacen falta esos frames guardados.
+        // Con la red pareja da 1, y 2 cuando un paquete cruza el borde de un tick (±1 ms de jitter): eso no es jitter
+        // de verdad y no sube el colchón. Un hueco de verdad (3 o más) lleva un frame de margen, por si el próximo
+        // es un poco más largo.
+        const needed = Math.min(MAX_TARGET_FRAMES, sincePush >= 3 ? sincePush + 1 : sincePush);
         neededInWindow = Math.max(neededInWindow, needed);
         if (needed > target) {
           target = needed;
@@ -94,13 +97,19 @@ export function createJitterBuffer(opts?: {
     },
     pop(): Uint8Array | null {
       if (sincePush !== null) sincePush += 1;
+      if (primed && frames.length === 0) {
+        // Recién ahora falta audio (sacar el último frame no es vaciarse: el próximo paquete puede llegar antes del
+        // pop siguiente). A mitad de frase se retoma enseguida; una frase nueva arranca con el colchón aprendido.
+        primed = false;
+        threshold = talking ? rebufferFrames : phraseThreshold();
+      }
       if (!primed) {
         if (playing && talking) starvedFor = 0;
         else if (starvedFor !== null && ++starvedFor >= UNDERRUN_SLOTS) starvedFor = null;
         playing = false;
         return null;
       }
-      const frame = frames.shift();
+      const frame = frames.shift()!;
       playing = true;
       stablePops += 1;
       if (stablePops >= STABLE_POPS) {
@@ -108,12 +117,12 @@ export function createJitterBuffer(opts?: {
         stablePops = 0;
         neededInWindow = 0;
       }
-      if (frames.length === 0) {
+      if (frames.length === 0 && !talking) {
+        // Terminó la frase: la próxima arranca con el colchón aprendido.
         primed = false;
-        // A mitad de frase se retoma enseguida; una frase nueva arranca con el colchón aprendido.
-        threshold = talking ? rebufferFrames : phraseThreshold();
+        threshold = phraseThreshold();
       }
-      return frame ?? null;
+      return frame;
     },
     get size(): number {
       return frames.length;
@@ -136,7 +145,10 @@ export function createJitterBuffer(opts?: {
       sincePush = null;
       // No viene más audio de esta frase: lo que espera para juntar el colchón suena ya, no al empezar la próxima.
       if (frames.length > 0) primed = true;
-      else if (!primed) threshold = Math.max(threshold, phraseThreshold());
+      else {
+        threshold = primed ? phraseThreshold() : Math.max(threshold, phraseThreshold());
+        primed = false;
+      }
     },
     takeStats(): JitterStats {
       const out = { underruns, drops, targetFrames: targetMax };

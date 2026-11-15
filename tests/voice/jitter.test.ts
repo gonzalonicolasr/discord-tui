@@ -115,7 +115,7 @@ describe("adaptive jitter buffer", () => {
   test("after a 120 ms hold the next phrase starts with enough cushion and is not cut", () => {
     const jb = createJitterBuffer({ prebufferFrames: 3, rebufferFrames: 2 });
     expect(cutsIn(phrase(jb, 50, 6))).toBeGreaterThan(0); // la primera enseña
-    // 6 frames retenidos = 7 slots sin paquetes: colchón de 8 (160 ms).
+    // 6 frames retenidos = 7 pops entre dos paquetes: colchón de 7 más uno de margen (160 ms).
     expect(jb.takeStats!().targetFrames).toBe(8);
     expect(cutsIn(phrase(jb, 50, 6))).toBe(0);
   });
@@ -166,4 +166,37 @@ test("when the phrase ends, the frames still waiting for the cushion play right 
   // La frase siguiente vuelve a juntar su colchón.
   jb.push(pcmOf(3));
   expect(jb.pop()).toBeNull();
+});
+
+describe("tick-boundary crossings are not jitter", () => {
+  test("a packet crossing a tick edge (two pops between two packets, then two packets in one slot) keeps the base cushion", () => {
+    const jb = createJitterBuffer({ prebufferFrames: 3, rebufferFrames: 2 });
+    let played = 0;
+    let cuts = 0;
+    let started = false;
+    for (let slot = 0; slot < 400; slot += 1) {
+      // Cada 7 slots un paquete llega 1 ms después del pop: ese slot no trae nada y el siguiente trae dos.
+      const kind = slot % 7;
+      if (kind !== 3) jb.push(pcmOf(1));
+      if (kind === 4) jb.push(pcmOf(1));
+      const frame = jb.pop();
+      if (frame) (played += 1), (started = true);
+      else if (started) cuts += 1;
+    }
+    expect(cuts).toBe(0);
+    expect(played).toBeGreaterThan(390);
+    // 40 ms de colchón, como con la red perfecta.
+    expect(jb.takeStats!().targetFrames).toBe(2);
+  });
+
+  test("taking the last frame is not running dry: a packet that comes before the next pop plays without a cut", () => {
+    const jb = createJitterBuffer({ prebufferFrames: 2, rebufferFrames: 2 });
+    jb.push(pcmOf(1));
+    jb.push(pcmOf(2));
+    expect(sampleAt(jb.pop()!, 0)).toBe(1);
+    expect(sampleAt(jb.pop()!, 0)).toBe(2);
+    jb.push(pcmOf(3));
+    expect(sampleAt(jb.pop()!, 0)).toBe(3);
+    expect(jb.takeStats!().underruns).toBe(0);
+  });
 });

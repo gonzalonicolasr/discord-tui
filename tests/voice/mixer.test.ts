@@ -213,6 +213,8 @@ describe("continuous mode (keeps pw-cat fed)", () => {
     const jb = h.mixer.buffer("a");
     for (let i = 0; i < 3; i += 1) jb.push(new Uint8Array(3840).fill(9));
     for (let i = 0; i < 3; i += 1) expect(jb.pop()).not.toBeNull();
+    // Un slot que lo encuentra vacío: ahí sí se vació a mitad de frase.
+    expect(jb.pop()).toBeNull();
     jb.push(new Uint8Array(3840).fill(9));
     expect(jb.pop()).toBeNull();
     jb.push(new Uint8Array(3840).fill(9));
