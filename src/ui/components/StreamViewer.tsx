@@ -17,16 +17,6 @@ const CELL_H = 20;
 const MAX_W = 960;
 const MAX_H = 540;
 
-/**
- * Con qué dibujar el video. En kitty solo si la imagen viaja por archivo: sin eso (la app Herdr por herdr-core contesta
- * que no lee archivos) cada cuadro va en "raw", ~2 MB entre borrar la imagen vieja y colocar la nueva, y herdr-core
- * corta el bloque de salida sincronizada en el medio: la app dibuja el recuadro vacío (parpadeo negro). En medios
- * bloques no hay imagen que borrar. Mientras se prueba el archivo también van bloques; sin gráficos kitty, lo de siempre.
- */
-function videoProtocol(fileState: string, kittyGraphics: boolean | undefined): "auto" | "blocks" {
-  return kittyGraphics && fileState !== "ready" ? "blocks" : "auto";
-}
-
 export function videoBox(cols: number, rows: number): { width: number; height: number } {
   return { width: Math.max(32, Math.min(MAX_W, cols * CELL_W)), height: Math.max(18, Math.min(MAX_H, rows * CELL_H)) };
 }
@@ -49,8 +39,6 @@ export function StreamViewer(props: { store: Store; theme: Theme; voice: VoiceAc
   );
   const [fps, setFps] = createSignal(0);
   const [hasFrame, setHasFrame] = createSignal(false);
-  const currentProtocol = () => videoProtocol(renderer.kittyImageTransportStatus.fileState, renderer.capabilities?.kitty_graphics);
-  const [protocol, setProtocol] = createSignal(currentProtocol());
   let area: BoxRenderable | undefined;
   let image: ImageRenderable | undefined;
   let pool: NativeImagePool | null = null;
@@ -82,7 +70,6 @@ export function StreamViewer(props: { store: Store; theme: Theme; voice: VoiceAc
         pool?.dispose();
         pool = new NativeImagePool({ width: frame.width, height: frame.height, capacity: 3, owner: renderer.nativeScene.resourceContext });
       }
-      setProtocol(currentProtocol()); // el sondeo del archivo termina después de montar
       const next = pool.publishRgba(frame.rgba);
       if (!next) return; // los 3 buffers ocupados: se saltea este cuadro
       image.source = next; // el renderable se queda con su propia referencia
@@ -151,7 +138,7 @@ export function StreamViewer(props: { store: Store; theme: Theme; voice: VoiceAc
           flexGrow={hasFrame() ? 1 : 0}
           height={hasFrame() ? undefined : 0}
           fit="fit"
-          protocol={protocol()}
+          protocol="auto"
         />
       </box>
       <box height={1} width="100%" paddingLeft={1} flexShrink={0}>

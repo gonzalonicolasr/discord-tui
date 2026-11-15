@@ -20,11 +20,8 @@ import type { DecodedFrame } from "../../src/watch/decode";
 const COLS = 120;
 const ROWS = 40;
 
-/**
- * Terminal falsa: graba cada escritura y contesta como Ghostty a las consultas de gráficos (`a=q`, `q=0`) y al DA1.
- * Con `fileOk: false` contesta como la app Herdr (por herdr-core): gráficos sí, archivo (`t=f`) no soportado.
- */
-function fakeTerminal(opts: { fileOk?: boolean } = {}) {
+/** Terminal falsa: graba cada escritura y contesta como Ghostty a las consultas de gráficos (`a=q`, `q=0`) y al DA1. */
+function fakeTerminal() {
   const stdin = new Readable({ read() {} });
   const writes: string[] = [];
   const reply = (text: string): void => void setTimeout(() => stdin.emit("data", Buffer.from(text)), 0);
@@ -40,9 +37,7 @@ function fakeTerminal(opts: { fileOk?: boolean } = {}) {
       writes.push(text);
       for (const m of text.matchAll(/\x1b_G([^;\x1b]*)/g)) {
         const id = /(?:^|,)i=(\d+)/.exec(m[1]!)?.[1];
-        if (!id || !/(?:^|,)(?:q=0|a=q)(?:,|$)/.test(m[1]!)) continue;
-        const file = /(?:^|,)t=f(?:,|$)/.test(m[1]!);
-        reply(file && opts.fileOk === false ? `\x1b_Gi=${id};ENOTSUPPORTED:file\x1b\\` : `\x1b_Gi=${id};OK\x1b\\`);
+        if (id && /(?:^|,)(?:q=0|a=q)(?:,|$)/.test(m[1]!)) reply(`\x1b_Gi=${id};OK\x1b\\`);
       }
       if (text.includes("\x1b[c")) reply("\x1b[?62;22c");
       done();
@@ -94,51 +89,5 @@ test("each new stream frame swaps the image in one small write, never leaving th
     expect(place).toBeGreaterThan(del);
     expect(place - del).toBeLessThan(1024);
     expect(writes.filter((w) => w.includes("\x1b_G"))).toHaveLength(1);
-  }
-});
-
-/**
- * La app Herdr (herdr-core) dibuja gráficos kitty pero no lee archivos: OpenTUI queda en "raw" y herdr-core corta el
- * bloque de salida sincronizada a mitad del cuadro (medido: con un cliente que lee a 30 MB/s, 77% de los cuadros de
- * 960×540 llegaban partidos entre el borrado y la colocación, el recuadro vacío). Sin transporte por archivo, el video
- * va en medios bloques (texto con colores): no hay imagen que borrar y no puede parpadear.
- */
-test("without the file transport the stream is drawn with blocks, sending no kitty graphics", async () => {
-  const term = fakeTerminal({ fileOk: false });
-  let push: ((frame: DecodedFrame) => void) | null = null;
-  const voice = { watchFrames: (_w: number, _h: number, fn: (f: DecodedFrame) => void) => ((push = fn), { resize() {}, unsubscribe() {} }) };
-  const h = await testRender(
-    () => <StreamViewer store={buildDemoStore()} theme={THEMES.dark} voice={voice as unknown as VoiceActions} />,
-    {
-      width: COLS,
-      height: ROWS,
-      stdin: term.stdin as never,
-      stdout: term.stdout as never,
-      bufferedOutput: "stdout",
-      remote: false,
-      kittyImageTransport: KITTY_IMAGE_TRANSPORT,
-    },
-  );
-  await h.renderer.setupTerminal();
-  for (let i = 0; i < 40 && (!h.renderer.capabilities?.kitty_graphics || h.renderer.kittyImageTransportStatus.fileState === "probing"); i++) await Bun.sleep(5);
-  expect(h.renderer.capabilities?.kitty_graphics).toBe(true);
-  expect(h.renderer.kittyImageTransportStatus.fileState).toBe("unsupported");
-  await h.renderOnce();
-
-  const out = new Uint8Array(480 * 270 * 4);
-  const frames: string[] = [];
-  for (let t = 0; t < 4; t++) {
-    term.writes.length = 0;
-    push!(syntheticFrame(480, 270, t, out));
-    await Promise.resolve();
-    await h.renderOnce();
-    await Bun.sleep(5);
-    frames.push(term.writes.join(""));
-  }
-  await h.dispose();
-
-  for (const all of frames) {
-    expect(all.includes("\x1b_G")).toBe(false);
-    expect(all.length).toBeGreaterThan(1000); // el cuadro sí se dibujó (en celdas)
   }
 });
