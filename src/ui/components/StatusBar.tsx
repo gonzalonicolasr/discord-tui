@@ -166,6 +166,10 @@ export function VoiceBar(props: {
           <text fg={props.theme.warn} wrapMode="none">{voice().pttWarning ? ` · ${voice().pttWarning}` : ""}</text>
           <text fg={props.theme.warn} wrapMode="none">{voice().micError ? ` · sin mic: ${voice().micError}` : ""}</text>
           <text fg={props.theme.accent} wrapMode="none">{viewersText()}</text>
+          {/* Entra TODO lo que suena en la PC (Slack, notificaciones…), menos zcord: que se vea. */}
+          <text fg={props.theme.warn} wrapMode="none">
+            {voice().stream.status === "live" && voice().stream.desktopAudio ? " · 🔊 con audio de la PC" : ""}
+          </text>
           {/* Se achica antes que el resto de la barra (el nombre del canal y E2EE no se cortan). */}
           <text fg={props.theme.error} wrapMode="none" flexShrink={50}>
             {voice().stream.status === "error" && voice().stream.error ? ` · ✗ transmisión: ${voice().stream.error}` : ""}

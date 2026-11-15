@@ -174,3 +174,20 @@ test("a stream error shows in the voice bar", async () => {
   expect(h.captureCharFrame()).toContain("✗ transmisión: no hay con qué");
   await s.actions.voice!.leaveVoice();
 });
+
+test("while the PC audio goes out with the stream, the voice bar says so (everything that plays is sent)", async () => {
+  const s = setup();
+  const h = await render(s);
+  await joinVoice(s);
+  s.store.dispatch({ type: "voice/stream", patch: { status: "live", desktopAudio: true } });
+  await h.renderOnce();
+  expect(h.captureCharFrame()).toContain("🔊 con audio de la PC");
+  s.store.dispatch({ type: "voice/stream", patch: { desktopAudio: false } });
+  await h.renderOnce();
+  expect(h.captureCharFrame()).not.toContain("con audio de la PC");
+  s.store.dispatch({ type: "voice/stream", patch: { status: "starting", desktopAudio: true } });
+  await h.renderOnce();
+  expect(h.captureCharFrame()).not.toContain("con audio de la PC"); // solo en vivo
+  s.store.dispatch({ type: "voice/stream", patch: { status: "idle", desktopAudio: undefined } });
+  await s.actions.voice!.leaveVoice();
+});

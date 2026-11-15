@@ -146,6 +146,10 @@ describe("PC audio", () => {
     expect(s.capture.started[0]).toMatchObject({ backend: "wf-recorder", audio: true });
     expect(s.spawned).toContainEqual(["pw-dump"]);
     expect(s.notices().some((t) => t.includes("audio"))).toBe(false);
+    await s.fake.ready();
+    expect(s.stream()).toMatchObject({ status: "live", desktopAudio: true });
+    await s.golive.stop();
+    expect(s.stream().desktopAudio).toBeUndefined();
   });
 
   test("without the PipeWire tools: video only, as before, with a notice", async () => {
@@ -154,7 +158,7 @@ describe("PC audio", () => {
     expect(s.capture.started[0]!.audio).toBe(false);
     expect(s.notices()).toContain(STREAM_ERRORS.noDesktopAudio);
     await s.fake.ready();
-    expect(s.stream().status).toBe("live");
+    expect(s.stream()).toMatchObject({ status: "live", desktopAudio: false });
   });
 
   test("PipeWire not answering (pw-dump fails): video only with a notice", async () => {
@@ -181,7 +185,7 @@ describe("PC audio", () => {
     expect(s.notices()).toContain(STREAM_ERRORS.noDesktopAudio);
     expect(s.fake.plays.length).toBe(1);
     await s.fake.ready();
-    expect(s.stream().status).toBe("live");
+    expect(s.stream()).toMatchObject({ status: "live", desktopAudio: false });
     expect(s.gw.sent.filter((x) => x.op === 18).length).toBe(1);
     expect(s.gw.sent.some((x) => x.op === 19)).toBe(false);
   });

@@ -94,7 +94,7 @@ export function createGoLive(deps: {
     a.shim?.destroy(); // op 19 si llegó a mandar el op 18
     a.shim = null;
     a.conn = null;
-    setStream({ status: error ? "error" : "idle", error, viewers: undefined, viewerIds: undefined });
+    setStream({ status: error ? "error" : "idle", error, viewers: undefined, viewerIds: undefined, desktopAudio: undefined });
     if (error) {
       log.warn("golive.stopped", { state: "error", msg: error.slice(0, 120) });
       notice(error);
@@ -172,7 +172,7 @@ export function createGoLive(deps: {
       conn: null,
     };
     active = a;
-    setStream({ status: "starting", monitor: monitorArg ?? null, error: null, viewers: undefined, viewerIds: undefined });
+    setStream({ status: "starting", monitor: monitorArg ?? null, error: null, viewers: undefined, viewerIds: undefined, desktopAudio: undefined });
     const monitor = monitorArg ?? (await defaultMonitor(state.settings.streamMonitor));
     if (active !== a) return;
     if (monitor) setStream({ monitor });
@@ -236,6 +236,7 @@ export function createGoLive(deps: {
         a.capture = capture;
       }
     }
+    setStream({ desktopAudio: audio });
     log.info("golive.start", { mode: `${backend}/${encoder}${audio ? "+audio" : ""}`, state: state.settings.streamQuality });
     if (backend === "grim") notice(GRIM_SLOW, "info");
     void capture.ended.then(() => {

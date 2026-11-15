@@ -188,6 +188,8 @@ export interface StreamState {
   viewers?: number;
   /** Quiénes miran (los `viewer_ids`, sin uno mismo). */
   viewerIds?: string[];
+  /** Se está mandando el audio de la PC (todo lo que suena, menos zcord) con la transmisión. */
+  desktopAudio?: boolean;
 }
 
 export type WatchStatus = "idle" | "connecting" | "watching" | "error";
