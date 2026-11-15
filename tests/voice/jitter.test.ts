@@ -161,16 +161,20 @@ describe("PLC in the jitter buffer", () => {
     return out;
   };
 
-  test("a frame missing in the middle of a phrase is filled with concealment instead of silence, and audio resumes right away", () => {
+  test("concealment starts only after two empty slots (a late packet finds the decoder untouched), and audio resumes right away", () => {
+    let asked = 0;
     const jb = createJitterBuffer({ prebufferFrames: 2, rebufferFrames: 2 });
-    jb.setConcealer!(plcOf(7));
+    jb.setConcealer!(() => (asked++, plcOf(7)()));
     jb.push(pcmOf(1));
     jb.push(pcmOf(2));
     expect(sampleAt(jb.pop()!, 0)).toBe(1);
     expect(sampleAt(jb.pop()!, 0)).toBe(2);
-    // falta el 3: PLC
+    // faltan: dos slots de espera sin tocar el decoder, después PLC
+    expect(jb.pop()).toBeNull();
+    expect(jb.pop()).toBeNull();
+    expect(asked).toBe(0);
     expect(sampleAt(jb.pop()!, 0)).toBe(7);
-    // llega el 4: se sigue con él sin esperar a juntar 2
+    // llega audio: se sigue con él sin esperar a juntar 2
     jb.push(pcmOf(4));
     expect(sampleAt(jb.pop()!, 0)).toBe(4);
     expect(jb.takeStats!()).toMatchObject({ concealed: 1, underruns: 1 });
@@ -181,8 +185,8 @@ describe("PLC in the jitter buffer", () => {
     jb.setConcealer!(plcOf(7));
     jb.push(pcmOf(1));
     jb.pop();
-    const out = Array.from({ length: 6 }, () => jb.pop());
-    expect(out.map((f) => (f ? sampleAt(f, 0) : null))).toEqual([7, 7, 7, null, null, null]);
+    const out = Array.from({ length: 7 }, () => jb.pop());
+    expect(out.map((f) => (f ? sampleAt(f, 0) : null))).toEqual([null, null, 7, 7, 7, null, null]);
   });
 
   test("the end of a phrase is not concealed (no PLC tail after the speaker stopped)", () => {
@@ -202,7 +206,7 @@ describe("PLC in the jitter buffer", () => {
       jb.setConcealer!(fn);
       jb.push(pcmOf(1));
       jb.pop();
-      expect(jb.pop()).toBeNull();
+      for (let i = 0; i < 4; i += 1) expect(jb.pop()).toBeNull();
     }
   });
 });

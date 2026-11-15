@@ -33,6 +33,12 @@ const UNDERRUN_SLOTS = 25;
 const MAX_TARGET_FRAMES = 10;
 /** Como mucho se tapan 60 ms seguidos con PLC; más que eso es un corte de verdad (y el PLC ya se apagó). */
 const MAX_CONCEALED_FRAMES = 3;
+/**
+ * Slots vacíos que se esperan antes de pedir PLC. Pedirlo avanza el decoder 120 ms: si el paquete solo venía tarde
+ * (lo más común con jitter), al llegar se decodificaría muy mal (~3 dB de SNR en vez de > 60). Si aparece en este
+ * rato, el decoder no se tocó. También evita una "cola" de PLC cuando el aviso de fin de frase llega un poco tarde.
+ */
+const PLC_WAIT_SLOTS = 2;
 
 /** Si en este rato de voz (500 × 20 ms = 10 s) no hizo falta tanto colchón, baja un frame. */
 const STABLE_POPS = 500;
@@ -143,7 +149,7 @@ export function createJitterBuffer(opts?: {
         else if (starvedFor !== null && ++starvedFor >= UNDERRUN_SLOTS) starvedFor = null;
         playing = false;
         // A mitad de una frase, mejor el audio que Opus estima que un hueco de silencio.
-        return talking && starvedFor !== null ? concealFrame() : null;
+        return talking && starvedFor !== null && starvedFor >= PLC_WAIT_SLOTS ? concealFrame() : null;
       }
       const frame = frames.shift();
       playing = true;

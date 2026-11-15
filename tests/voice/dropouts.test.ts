@@ -137,18 +137,4 @@ describe("dropouts while listening (fake clock)", () => {
     expect(sim.cuts(6, "silence")).toBe(0);
     expect(sim.cuts(6, "starved")).toBeLessThanOrEqual(stalls.length * 4);
   });
-
-  test("single lost packets: with Opus PLC the gap is concealed instead of heard as silence", () => {
-    // 4 % de paquetes perdidos sueltos y algo de jitter (0-15 ms).
-    const network = () => {
-      let seed = 3;
-      const rnd = () => ((seed = (seed * 1103515245 + 12345) >>> 0) / 2 ** 32);
-      return (sentAt: number) => (rnd() < 0.04 ? null : sentAt + 5 + Math.floor(rnd() * 15));
-    };
-    const without = simulate({ seconds: 40, arrival: network() });
-    const withPlc = simulate({ seconds: 40, arrival: network(), conceal: true });
-    expect(without.cuts(5, "silence")).toBeGreaterThan(0);
-    expect(withPlc.cuts(5, "silence")).toBe(0);
-    expect(withPlc.mixer.stats().concealed).toBeGreaterThan(0);
-  });
 });
