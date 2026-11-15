@@ -158,3 +158,17 @@ test("codecs on a dropped WASM module move too even if that module answers with 
     setWasmModuleFactoryForTests(null);
   }
 });
+
+test("destroying a codec whose WASM module was dropped does not call into the broken module", () => {
+  setWasmModuleFactoryForTests(() => fakeOpusModule({ trapOn: 0xee }));
+  try {
+    const a = createOpusCodec({ prefer: "wasm" });
+    const idle = createOpusCodec({ prefer: "wasm" });
+    expect(() => a.decode(Uint8Array.of(0xee))).toThrow(WebAssembly.RuntimeError);
+    // `idle` no habló desde el trap: sigue atado al módulo roto, que trapea si se lo llama.
+    expect(() => idle.destroy()).not.toThrow();
+    a.destroy();
+  } finally {
+    setWasmModuleFactoryForTests(null);
+  }
+});

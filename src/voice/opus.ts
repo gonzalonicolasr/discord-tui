@@ -114,7 +114,10 @@ export function createOpusCodec(opts?: { prefer?: "native" | "wasm" }): OpusCode
       }
     },
     destroy(): void {
-      if (which === "wasm") (opus as WasmOpus).delete();
+      if (which !== "wasm") return;
+      const wasm = opus as WasmOpus;
+      // Si su módulo se descartó por un trap no se lo vuelve a llamar: la memoria se va con el módulo entero.
+      if (!wasm.stale()) wasm.delete();
     },
     decode(opusPacket: Uint8Array): Uint8Array {
       const input = Buffer.from(opusPacket.buffer, opusPacket.byteOffset, opusPacket.byteLength);
