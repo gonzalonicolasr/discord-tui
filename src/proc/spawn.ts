@@ -28,16 +28,18 @@ export function spawnClean(
   opts?: {
     /** Un ReadableStream (p. ej. el stdout de otro proceso) lo conecta directo, sin pasar por JS. */
     stdin?: "pipe" | "ignore" | ReadableStream<Uint8Array>;
-    stdout?: "pipe" | "ignore";
+    /** Un número es un fd abierto (p. ej. el `fd3` de otro proceso): el hijo escribe directo ahí. */
+    stdout?: "pipe" | "ignore" | number;
     stderr?: "pipe" | "ignore" | "inherit";
+    /** Un pipe extra como fd 3 del hijo; el extremo nuestro queda en `proc.stdio[3]` (un fd). */
+    fd3?: "pipe";
   },
 ): Subprocess {
-  return Bun.spawn(cmd, {
-    env: cleanEnv(),
-    stdin: opts?.stdin ?? "ignore",
-    stdout: opts?.stdout ?? "pipe",
-    // Por defecto los hijos no escriben en la terminal: un navegador abierto con xdg-open (o cualquier
-    // otro) metía sus logs arriba de la TUI ("zygote boot message: Broken pipe").
-    stderr: opts?.stderr ?? "ignore",
-  });
+  const stdin = opts?.stdin ?? "ignore";
+  const stdout = opts?.stdout ?? "pipe";
+  // Por defecto los hijos no escriben en la terminal: un navegador abierto con xdg-open (o cualquier
+  // otro) metía sus logs arriba de la TUI ("zygote boot message: Broken pipe").
+  const stderr = opts?.stderr ?? "ignore";
+  if (opts?.fd3) return Bun.spawn(cmd, { env: cleanEnv(), stdio: [stdin, stdout, stderr, "pipe"] });
+  return Bun.spawn(cmd, { env: cleanEnv(), stdin, stdout, stderr });
 }
