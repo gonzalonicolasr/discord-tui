@@ -79,9 +79,12 @@ export function isZcordProcess(pid: number): boolean {
 
 type Obj = { id: number; type: string; info: any };
 
+/** Un id de PipeWire válido: entero >= 0 (los ids van a pw-link como argumentos; uno negativo sería una opción). */
+const isId = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value) && value >= 0;
+
 function objects(dump: unknown): Obj[] {
   if (!Array.isArray(dump)) return [];
-  return dump.filter((o): o is Obj => typeof o?.id === "number" && typeof o?.type === "string" && typeof o?.info === "object" && o.info !== null);
+  return dump.filter((o): o is Obj => isId(o?.id) && typeof o?.type === "string" && typeof o?.info === "object" && o.info !== null);
 }
 
 interface Graph {
@@ -115,7 +118,9 @@ function graph(dump: unknown, opts: { recorderPid: number; isOwn: (pid: number) 
 
   const existing: Array<[number, number]> = [];
   for (const o of all) {
-    if (o.type === "PipeWire:Interface:Link") existing.push([Number(o.info["output-port-id"]), Number(o.info["input-port-id"])]);
+    const out: unknown = o.info["output-port-id"];
+    const input: unknown = o.info["input-port-id"];
+    if (o.type === "PipeWire:Interface:Link" && isId(out) && isId(input)) existing.push([out, input]);
   }
   const nodeById = new Map(nodes.map((n) => [n.id, n]));
   const nodeOfPort = new Map<number, Obj>();

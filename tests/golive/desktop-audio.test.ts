@@ -134,6 +134,26 @@ describe("planLinks", () => {
   });
 });
 
+describe("ids", () => {
+  test("only integer ids >= 0 ever reach pw-link (a negative one would read as an option)", () => {
+    const odd = [
+      ...dump(),
+      client(70, 7100, "app-rara"),
+      node(710, 70, "Stream/Output/Audio", "rara"),
+      port(-3, 710, "output", "FL"),
+      port(1.5, 710, "output", "FR"),
+      { id: 9999, type: "PipeWire:Interface:Link", info: { "output-port-id": -7, "input-port-id": 101 } },
+      { id: 9998, type: "PipeWire:Interface:Link", info: { "output-port-id": "301", "input-port-id": 102 } },
+    ];
+    const all = [...planLinks(odd, { recorderPid: RECORDER_PID, isOwn }), ...planUnlinks(odd, { recorderPid: RECORDER_PID, isOwn })].flat();
+    expect(all.every((id) => Number.isInteger(id) && id >= 0)).toBe(true);
+    expect(planUnlinks(odd, { recorderPid: RECORDER_PID, isOwn })).toEqual([
+      [301, 101],
+      [511, 102],
+    ]);
+  });
+});
+
 describe("planUnlinks", () => {
   test("undoes links into our recorder from zcord, mixers or unidentified nodes; leaves the good ones and other instances alone", () => {
     const unidentified = [...dump(), link(901, 101), link(951, 102)];
