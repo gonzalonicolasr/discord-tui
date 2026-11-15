@@ -28,7 +28,10 @@ interface NativeHandler {
 }
 
 const APPLICATION_AUDIO = 2049;
-const MAX_FRAME_SAMPLES = 2880; // 60 ms a 48 kHz
+// El C++ decodifica paquetes de hasta 120 ms (el máximo de Opus, varios frames en un paquete "code 3"), aunque
+// el wrapper de opusscript reserve para 60 ms. Con 60 ms, un paquete más largo (o basura que parsea como uno)
+// escribía hasta 23 KB más allá del buffer y pisaba los otros códecs del heap compartido.
+const MAX_FRAME_SAMPLES = 5760; // 120 ms a 48 kHz
 const MAX_PACKET_BYTES = 1276 * 3;
 
 let native: NativeModule | null = null;

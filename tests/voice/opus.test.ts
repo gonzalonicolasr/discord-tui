@@ -68,3 +68,36 @@ test("many codecs alive at once keep working (opusscript's own wrapper aborts fr
   for (const d of decoders) d.destroy();
   encoder.destroy();
 });
+
+/** Junta frames Opus de 20 ms en un solo paquete "code 3" (RFC 6716 §3.2.5): un paquete válido de hasta 120 ms. */
+function longPacket(frames: Uint8Array[]): Uint8Array {
+  const bytes = [(frames[0]![0]! & 0xfc) | 3, 0x80 | frames.length];
+  for (const frame of frames.slice(0, -1)) {
+    const length = frame.length - 1;
+    if (length < 252) bytes.push(length);
+    else {
+      const first = 252 + ((length - 252) & 3);
+      bytes.push(first, (length - first) / 4);
+    }
+  }
+  for (const frame of frames) bytes.push(...frame.subarray(1));
+  return Uint8Array.from(bytes);
+}
+
+test("a 120 ms Opus packet decodes whole and does not overwrite the other codecs in the WASM heap", () => {
+  const encoder = createOpusCodec({ prefer: "wasm" });
+  const frames = Array.from({ length: 6 }, () => encoder.encode(sine440()));
+  const decoder = createOpusCodec({ prefer: "wasm" });
+  const neighbours = Array.from({ length: 8 }, () => createOpusCodec({ prefer: "wasm" }));
+
+  const out = decoder.decode(longPacket(frames));
+
+  expect(out.length).toBe(FRAME_BYTES * 6);
+  // Los que estaban al lado en el heap siguen decodificando bien, y el que recibió el paquete largo también.
+  for (const codec of [...neighbours, decoder]) {
+    codec.decode(frames[0]!);
+    expect(rms(codec.decode(frames[1]!))).toBeGreaterThan(1000);
+  }
+  expect(encoder.encode(sine440()).length).toBeGreaterThan(0);
+  for (const codec of [...neighbours, decoder, encoder]) codec.destroy();
+});
