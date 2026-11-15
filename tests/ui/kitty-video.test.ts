@@ -1,9 +1,11 @@
 import { expect, test } from "bun:test";
 import { inflateSync } from "node:zlib";
 
-import { KittyVideo, probeZlib } from "../../src/ui/kitty-video";
+import { KittyVideo, probeZlib, visibleParts, type VideoView } from "../../src/ui/kitty-video";
 
 const BOX = { col: 1, row: 3, cols: 40, rows: 12 };
+const whole = (box = BOX): VideoView => ({ box, parts: [{ x: 0, y: 0, w: box.cols, h: box.rows }] });
+const VIEW = whole();
 const px = (w: number, h: number): Uint8Array => new Uint8Array(w * h * 4).fill(200);
 
 function output(accept: () => boolean = () => true) {
@@ -24,7 +26,7 @@ test("each frame is placed with the other id before the previous one is deleted"
   const o = output();
   const v = new KittyVideo(o.out);
   for (let i = 0; i < 3; i++) {
-    v.show(px(8, 4), 8, 4, BOX);
+    v.show(px(8, 4), 8, 4, VIEW);
     o.flushIdle();
     await Bun.sleep(0);
   }
@@ -42,13 +44,13 @@ test("a frame that finds the output full is skipped and the shown image stays pl
   let full = false;
   const o = output(() => !full);
   const v = new KittyVideo(o.out);
-  v.show(px(8, 4), 8, 4, BOX);
+  v.show(px(8, 4), 8, 4, VIEW);
   o.flushIdle();
   await Bun.sleep(0);
   full = true;
-  v.show(px(8, 4), 8, 4, BOX);
+  v.show(px(8, 4), 8, 4, VIEW);
   full = false;
-  v.show(px(8, 4), 8, 4, BOX);
+  v.show(px(8, 4), 8, 4, VIEW);
   expect(o.writes).toHaveLength(2);
   const first = ids(o.writes[0]!, /a=p,i=(\d+)/g)[0]!;
   expect(o.writes[1]).toContain(`a=d,d=I,i=${first}`); // borra la que de verdad estaba colocada
@@ -57,23 +59,23 @@ test("a frame that finds the output full is skipped and the shown image stays pl
 test("only the latest frame waits while one is being written, moves re-place, clear deletes both ids", async () => {
   const o = output();
   const v = new KittyVideo(o.out);
-  v.show(px(8, 4), 8, 4, BOX);
-  v.show(px(8, 4), 8, 4, BOX);
-  v.show(px(8, 4), 8, 4, BOX);
+  v.show(px(8, 4), 8, 4, VIEW);
+  v.show(px(8, 4), 8, 4, VIEW);
+  v.show(px(8, 4), 8, 4, VIEW);
   expect(o.writes).toHaveLength(1);
   o.flushIdle();
   await Bun.sleep(0);
   expect(o.writes).toHaveLength(2);
   expect(v.written).toBe(2);
 
-  v.move({ ...BOX, row: 5 });
-  expect(o.writes.at(-1)).toMatch(/^\x1b\[\?2026h\x1b7\x1b\[6;2H\x1b_Ga=p,i=\d+,p=1,c=40,r=12,C=1/);
-  v.move({ ...BOX, row: 5 });
+  v.move(whole({ ...BOX, row: 5 }));
+  expect(o.writes.at(-1)).toMatch(/^\x1b\[\?2026h\x1b7\x1b\[6;2H\x1b_Ga=p,i=\d+,p=1,x=0,y=0,w=8,h=4,c=40,r=12,C=1/);
+  v.move(whole({ ...BOX, row: 5 }));
   expect(o.writes).toHaveLength(3); // misma caja: no vuelve a escribir
 
   v.dispose();
   expect(ids(o.writes.at(-1)!, /a=d,d=I,i=(\d+)/g)).toHaveLength(2);
-  v.show(px(8, 4), 8, 4, BOX);
+  v.show(px(8, 4), 8, 4, VIEW);
   expect(o.writes).toHaveLength(4);
 });
 
@@ -120,11 +122,55 @@ test("with zlib on, the frame goes compressed (o=z) and inflates back to the RGB
   const v = new KittyVideo(o.out);
   v.zlib = true;
   const rgba = new Uint8Array(8 * 4 * 4).map((_, i) => (i * 37) & 255);
-  v.show(rgba, 8, 4, BOX);
+  v.show(rgba, 8, 4, VIEW);
   const w = o.writes[0]!;
   expect(w).toMatch(/\x1b_Ga=t,f=24,o=z,s=8,v=4,/);
   const b64 = [...w.matchAll(/\x1b_G[^;]*;([^\x1b]*)\x1b\\/g)].map((m) => m[1]).join("");
   const rgb = inflateSync(Buffer.from(b64, "base64"));
   expect([...rgb.subarray(0, 6)]).toEqual([0, 1, 2, 4, 5, 6].map((i) => rgba[i]!));
   expect(rgb.length).toBe(8 * 4 * 3);
+});
+
+test("visible parts: a box over the middle leaves four rectangles, all covered leaves none", () => {
+  const hole = (x: number, y: number): boolean => x >= 3 && x < 7 && y >= 2 && y < 4;
+  expect(visibleParts(10, 6, hole)).toEqual([
+    { x: 0, y: 0, w: 10, h: 2 },
+    { x: 0, y: 2, w: 3, h: 2 },
+    { x: 7, y: 2, w: 3, h: 2 },
+    { x: 0, y: 4, w: 10, h: 2 },
+  ]);
+  expect(visibleParts(10, 6, () => false)).toEqual([{ x: 0, y: 0, w: 10, h: 6 }]);
+  expect(visibleParts(10, 6, () => true)).toEqual([]);
+  expect(visibleParts(40, 40, (x, y) => (x + y) % 2 === 0)).toEqual([]); // demasiado recortado: no se muestra
+});
+
+test("each visible part is placed with its pixel crop; parts that go away are removed without deleting the image", async () => {
+  const o = output();
+  const v = new KittyVideo(o.out);
+  const box = { col: 0, row: 0, cols: 10, rows: 6 };
+  const split: VideoView = { box, parts: [{ x: 0, y: 0, w: 10, h: 2 }, { x: 7, y: 2, w: 3, h: 4 }] };
+  v.show(px(100, 60), 100, 60, split);
+  const w = o.writes[0]!;
+  expect(w).toContain("\x1b[1;1H\x1b_Ga=p,i=");
+  expect(w).toMatch(/p=1,x=0,y=0,w=100,h=20,c=10,r=2,/);
+  expect(w).toContain("\x1b[3;8H");
+  expect(w).toMatch(/p=2,x=70,y=20,w=30,h=40,c=3,r=4,/);
+  const id = ids(w, /a=p,i=(\d+)/g)[0]!;
+  o.flushIdle();
+  await Bun.sleep(0);
+
+  v.move(whole(box)); // se cerró lo que tapaba
+  const back = o.writes.at(-1)!;
+  expect(back).toMatch(new RegExp(`a=p,i=${id},p=1,x=0,y=0,w=100,h=60,c=10,r=6,`));
+  expect(back).toContain(`a=d,d=i,i=${id},p=2,`);
+  expect(back.includes("d=I")).toBe(false); // la imagen sigue guardada
+  expect(back.indexOf("a=p")).toBeLessThan(back.indexOf("a=d")); // primero la colocación entera, después se saca la parte
+
+  v.move({ box, parts: [] }); // todo tapado: se sacan las colocaciones y no se manda ningún cuadro
+  expect(o.writes.at(-1)).toContain(`a=d,d=i,i=${id},p=1,`);
+  const before = o.writes.length;
+  v.show(px(100, 60), 100, 60, { box, parts: [] });
+  expect(o.writes).toHaveLength(before);
+  v.move(whole(box)); // se destapa: vuelve el último cuadro
+  expect(o.writes.at(-1)).toMatch(new RegExp(`a=p,i=${id},p=1,`));
 });

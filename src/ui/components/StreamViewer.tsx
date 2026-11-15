@@ -1,4 +1,4 @@
-import { ImageRenderable, NativeImagePool, type BoxRenderable } from "@opentui/core";
+import { ImageRenderable, NativeImagePool, Renderable, type BoxRenderable } from "@opentui/core";
 import { useRenderer } from "@opentui/solid";
 import { createSignal, onCleanup, Show, type JSX } from "solid-js";
 
@@ -7,7 +7,7 @@ import type { Store } from "../../store/store";
 import type { DecodedFrame } from "../../watch/decode";
 import type { FrameSubscription } from "../../watch/watch";
 import { displayName, truncate } from "../format";
-import { type CellBox, KittyVideo, probeZlib } from "../kitty-video";
+import { KittyVideo, probeZlib, visibleParts, type VideoView } from "../kitty-video";
 import { jsonEqual, useSelector } from "../store-bridge";
 import type { Theme } from "../theme";
 import { Button } from "./Button";
@@ -51,18 +51,60 @@ export function StreamViewer(props: { store: Store; theme: Theme; voice: VoiceAc
   let lastBox = "";
   // Sin transporte por archivo el `<image>` borra antes de colocar (parpadeo en herdr-core): el video va por KittyVideo.
   let video: KittyVideo | null = null;
-  const ownKitty = (): boolean => !!image && image.effectiveProtocol === "kitty" && renderer.kittyImageTransportStatus.fileState !== "ready";
   let frameSize = { width: 0, height: 0 };
-  /** Dónde coloca la imagen el `<image>` (centrada y ajustada a su caja), para que KittyVideo la ponga igual. */
-  function cellBox(): CellBox {
+  let videoView: VideoView | null = null;
+  function decidePath(): "image" | "own" {
+    return image!.effectiveProtocol === "kitty" && renderer.kittyImageTransportStatus.fileState !== "ready" ? "own" : "image";
+  }
+  /**
+   * Dónde y qué partes de la imagen se ven: la caja como la coloca el `<image>` (centrada y ajustada), menos las celdas
+   * que tapa algo con fondo pintado después (según los hits del último cuadro presentado), como recorta el nativo.
+   */
+  function computeView(): VideoView {
     const img = image!;
     const fit = img.getFittedSize(img.width, img.height, img.cellAspectRatio, frameSize.width, frameSize.height);
-    return {
+    const box = {
       col: img.screenX + Math.floor((img.width - fit.width) / 2),
       row: img.screenY + Math.floor((img.height - fit.height) / 2),
       cols: fit.width,
       rows: fit.height,
     };
+    const mine = new Set<number>();
+    for (let r: Renderable | null = img; r; r = r.parent) mine.add(r.num);
+    const opaque = new Map<number, boolean>();
+    const coveredBy = (num: number): boolean => {
+      let hit = opaque.get(num);
+      if (hit === undefined) {
+        hit = false;
+        for (let r = Renderable.renderablesByNumber.get(num) ?? null; r && !mine.has(r.num); r = r.parent) {
+          const bg = (r as { backgroundColor?: { a: number } }).backgroundColor;
+          if (bg && bg.a > 0) (hit = true), (r = null);
+          if (!r) break;
+        }
+        opaque.set(num, hit);
+      }
+      return hit;
+    };
+    const parts = visibleParts(box.cols, box.rows, (x, y) => {
+      const num = renderer.hitTest(box.col + x, box.row + y);
+      return num !== 0 && !mine.has(num) && coveredBy(num);
+    });
+    return { box, parts };
+  }
+  const onPresented = (): void => {
+    if (!video || !image || image.isDestroyed || !hasFrame()) return;
+    videoView = computeView();
+    video.move(videoView);
+  };
+  function startOwnVideo(): KittyVideo {
+    const v = new KittyVideo(renderer.nativeScene.driver);
+    renderer.on("frame", onPresented); // después de cada cuadro: lo que tapa el video o dónde quedó la caja
+    if (zlibTerminals.has(renderer)) v.zlib = true;
+    else
+      void probeZlib(renderer.nativeScene.driver, renderer).then((ok) => {
+        if (ok) (zlibTerminals.add(renderer), (v.zlib = true));
+      });
+    return v;
   }
 
   const fpsTimer = setInterval(() => {
@@ -86,22 +128,18 @@ export function StreamViewer(props: { store: Store; theme: Theme; voice: VoiceAc
       sub?.resize(box.width, box.height);
     }
     try {
-      if (ownKitty()) {
+      if (decidePath() === "own") {
         if (image.source) image.source = undefined;
-        if (!video) {
-          const v = (video = new KittyVideo(renderer.nativeScene.driver));
-          if (zlibTerminals.has(renderer)) v.zlib = true;
-          else
-            void probeZlib(renderer.nativeScene.driver, renderer).then((ok) => {
-              if (ok) (zlibTerminals.add(renderer), (v.zlib = true));
-            });
-        }
-        frameSize = { width: frame.width, height: frame.height };
+        video ??= startOwnVideo();
         if (!hasFrame()) return void setHasFrame(true); // la caja recién crece en la pintada siguiente
-        video.show(frame.rgba, frame.width, frame.height, cellBox());
+        if (frame.width !== frameSize.width || frame.height !== frameSize.height || !videoView) {
+          frameSize = { width: frame.width, height: frame.height };
+          videoView = computeView();
+        }
+        video.show(frame.rgba, frame.width, frame.height, videoView);
         return;
       }
-      if (video) (video.dispose(), (video = null));
+      if (video) (renderer.off("frame", onPresented), video.dispose(), (video = null), (videoView = null));
       if (!pool || pool.width !== frame.width || pool.height !== frame.height) {
         pool?.dispose();
         pool = new NativeImagePool({ width: frame.width, height: frame.height, capacity: 3, owner: renderer.nativeScene.resourceContext });
@@ -122,6 +160,7 @@ export function StreamViewer(props: { store: Store; theme: Theme; voice: VoiceAc
   sub = props.voice?.watchFrames?.(start.width, start.height, show) ?? null;
   onCleanup(() => {
     clearInterval(fpsTimer);
+    renderer.off("frame", onPresented);
     video?.dispose();
     video = null;
     sub?.unsubscribe();
@@ -172,7 +211,6 @@ export function StreamViewer(props: { store: Store; theme: Theme; voice: VoiceAc
         </Show>
         <image
           ref={(node: ImageRenderable) => (image = node)}
-          renderAfter={() => video && queueMicrotask(() => video && image && !image.isDestroyed && video.move(cellBox()))}
           width="100%"
           flexGrow={hasFrame() ? 1 : 0}
           height={hasFrame() ? undefined : 0}
