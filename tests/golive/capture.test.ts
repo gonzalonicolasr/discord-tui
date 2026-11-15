@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { Readable } from "node:stream";
 
 import {
   DEFAULT_MONITOR,
@@ -399,4 +400,43 @@ test.skipIf(!ffmpegReady)("real ffmpeg with our args emits an IDR keyframe every
     .filter(([, flags]) => flags?.startsWith("K"))
     .map(([pts]) => Math.round(Number(pts)));
   expect(keyTimes).toEqual([0, 2, 4]);
+}, 20_000);
+
+// Con el ffmpeg real y fuentes SINTÉTICAS (lavfi; un tono en lugar de pw-record, nada de PipeWire ni pantalla):
+// el audio entra por el fd 3 de Bun y sale Opus junto al H264 en el NUT, sin pts negativos (NUT los rechaza).
+test.skipIf(!ffmpegReady)("real ffmpeg with audio on fd 3 muxes H264 + Opus with no negative pts", async () => {
+  const env: CaptureEnv = {
+    which: () => true,
+    exists: () => false,
+    spawn: (cmd, opts) => {
+      const real =
+        cmd[0] === "wf-recorder"
+          ? ["ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30", "-t", "1", "-c:v", "rawvideo", "-pix_fmt", "yuv420p", "-f", "nut", "pipe:1"]
+          : cmd[0] === "pw-record"
+            ? // el audio llega después que el video: ahí el pre-skip del Opus daba pts negativo
+              ["sh", "-c", "sleep 0.3; exec ffmpeg -hide_banner -nostdin -loglevel error -f lavfi -i sine=frequency=440:sample_rate=48000 -t 1.2 -ac 2 -f s16le pipe:1"]
+            : cmd[0] === "pw-dump"
+              ? ["echo", "[]"]
+              : cmd[0] === "pw-link"
+                ? ["true"]
+                : cmd;
+      return defaultCaptureEnv.spawn(real, opts);
+    },
+  };
+  const handle = startCapture({ backend: "wf-recorder", encoder: "x264", monitor: "", quality: QUALITY["720p30"], env, audio: true });
+  const probe = defaultCaptureEnv.spawn(
+    ["ffprobe", "-v", "error", "-f", "nut", "-i", "pipe:0", "-show_entries", "stream=index,codec_name,sample_rate,channels:packet=stream_index,pts", "-of", "json"],
+    { stdin: Readable.toWeb(handle.output) as unknown as ReadableStream<Uint8Array>, stdout: "pipe", stderr: "ignore" },
+  );
+  const json = JSON.parse(await new Response(probe.stdout as ReadableStream).text());
+  await probe.exited;
+  await handle.stop();
+  const streams = json.streams as Array<{ index: number; codec_name: string; sample_rate?: string; channels?: number }>;
+  expect(streams.map((s) => s.codec_name).sort()).toEqual(["h264", "opus"]);
+  const opus = streams.find((s) => s.codec_name === "opus")!;
+  expect(opus).toMatchObject({ sample_rate: "48000", channels: 2 });
+  const packets = json.packets as Array<{ stream_index: number; pts: number }>;
+  expect(packets.some((p) => p.stream_index === opus.index)).toBe(true);
+  expect(packets.some((p) => p.stream_index !== opus.index)).toBe(true);
+  expect(packets.every((p) => p.pts >= 0)).toBe(true);
 }, 20_000);
