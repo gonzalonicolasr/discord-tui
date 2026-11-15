@@ -124,6 +124,12 @@ function parseIdle(value: unknown, fallback = DEFAULT_SETTINGS.idleAfterMinutes)
   return fallback;
 }
 
+/** Como parseIdle pero con piso de 1 minuto: 0.4 redondeaba a 0 y silenciaba casi al instante. */
+function parseAutoMute(value: unknown): number | null {
+  const minutes = parseIdle(value, DEFAULT_SETTINGS.autoMuteAfterMinutes);
+  return minutes === null ? null : Math.max(1, minutes);
+}
+
 function parseSounds(value: unknown): SoundSettings {
   const record = asRecord(value);
   const events = allCues(true);
@@ -164,7 +170,7 @@ export function normalizeSettings(raw: unknown): Settings {
       : DEFAULT_SETTINGS.streamQuality,
     sounds: parseSounds(record.sounds),
     joinMuted: typeof record.joinMuted === "boolean" ? record.joinMuted : DEFAULT_SETTINGS.joinMuted,
-    autoMuteAfterMinutes: parseIdle(record.autoMuteAfterMinutes, DEFAULT_SETTINGS.autoMuteAfterMinutes),
+    autoMuteAfterMinutes: parseAutoMute(record.autoMuteAfterMinutes),
   };
 }
 

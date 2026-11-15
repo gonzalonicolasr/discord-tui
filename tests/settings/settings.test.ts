@@ -214,6 +214,9 @@ describe("mic safety settings", () => {
     expect(normalizeSettings({ autoMuteAfterMinutes: null }).autoMuteAfterMinutes).toBeNull();
     expect(normalizeSettings({ autoMuteAfterMinutes: 30 }).autoMuteAfterMinutes).toBe(30);
     expect(normalizeSettings({ autoMuteAfterMinutes: 4.6 }).autoMuteAfterMinutes).toBe(5);
+    // menos de un minuto redondeaba a 0: silenciaba casi al instante
+    expect(normalizeSettings({ autoMuteAfterMinutes: 0.4 }).autoMuteAfterMinutes).toBe(1);
+    expect(normalizeSettings({ autoMuteAfterMinutes: 0.01 }).autoMuteAfterMinutes).toBe(1);
     for (const bad of [0, -3, "10", Number.NaN, true]) {
       expect(normalizeSettings({ autoMuteAfterMinutes: bad, theme: "light" })).toMatchObject({ autoMuteAfterMinutes: 10, theme: "light" });
     }
