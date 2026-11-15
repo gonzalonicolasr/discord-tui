@@ -369,6 +369,42 @@ describe("process cleanup (real processes standing in for wf-recorder / grim / f
     }
   });
 
+  test("if ffmpeg dies, wf-recorder ends by SIGPIPE on its own and nothing is left alive", async () => {
+    for (const audio of [false, true]) {
+      const procs: Record<string, ProcLike> = {};
+      const env: CaptureEnv = {
+        which: () => true,
+        exists: () => false,
+        spawn: (cmd, opts) => {
+          const real =
+            cmd[0] === "wf-recorder"
+              ? ["cat", "/dev/zero"]
+              : cmd[0] === "pw-record"
+                ? ["cat", "/dev/zero"]
+                : cmd[0] === "pw-dump"
+                  ? ["echo", "[]"]
+                  : cmd[0] === "pw-link"
+                    ? ["true"]
+                    : // "ffmpeg" lee un poco del video y muere
+                      ["sh", "-c", "exec head -c 100000 <&4 >/dev/null"];
+          const proc = defaultCaptureEnv.spawn(real, opts);
+          procs[cmd[0]!] = proc;
+          return proc;
+        },
+      };
+      const handle = startCapture({ backend: "wf-recorder", encoder: "x264", monitor: "", quality: QUALITY["720p30"], env, audio, audioGraceMs: 50 });
+      const ended = await Promise.race([handle.ended.then(() => "ended"), Bun.sleep(3000).then(() => "timeout")]);
+      expect(ended).toBe("ended");
+      // nadie le manda una señal a wf-recorder: muere al escribir en un socket sin lector
+      const wf = procs["wf-recorder"] as unknown as { exited: Promise<number>; signalCode: string | null };
+      await Promise.race([wf.exited, Bun.sleep(2000)]);
+      expect(wf.signalCode).toBe("SIGPIPE");
+      await Bun.sleep(50);
+      expect(Object.values(procs).filter((p) => alive(p.pid))).toEqual([]);
+      await handle.stop();
+    }
+  });
+
   test("a capture that dies on its own resolves `ended`", async () => {
     const { env } = standIns((cmd) => (cmd[0] === "wf-recorder" ? ["true"] : FFMPEG_FD4));
     const handle = startCapture({ backend: "wf-recorder", encoder: "x264", monitor: "", quality: QUALITY["720p30"], env });
