@@ -52,7 +52,7 @@ export interface ProcLike {
   readonly stderr?: ReadableStream<Uint8Array> | number | null | undefined;
   readonly exited: Promise<number>;
   readonly exitCode?: number | null;
-  /** Con `fd3: "pipe"`, `stdio[3]` es nuestro extremo (un fd) de ese pipe. */
+  /** Con `fd3: "pipe"` / `fd4: "pipe"`, `stdio[3]` / `stdio[4]` es nuestro extremo (un fd) de ese pipe. */
   readonly stdio?: ReadonlyArray<unknown>;
   kill(signal?: number | NodeJS.Signals): void;
 }
