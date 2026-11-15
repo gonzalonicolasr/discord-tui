@@ -161,7 +161,11 @@ export function createReceiver(deps: {
     recordArrival(userId, at);
     setSpeaking(userId, true);
     armTimeout(userId);
-    if (deps.isDeaf()) return;
+    if (deps.isDeaf()) {
+      // Sigue hablando aunque no se lo decodifique: que el barrido no le libere el decoder (y apague su indicador).
+      if (decoders.has(userId)) lastHeard.set(userId, at);
+      return;
+    }
 
     let decoder = decoders.get(userId);
     if (!decoder) {

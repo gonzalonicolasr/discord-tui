@@ -303,3 +303,30 @@ test("an empty Opus packet is ignored (the WASM decoder would turn it into 120 m
   h.opus("a", Uint8Array.of(1));
   expect(h.pushed.a).toHaveLength(1);
 });
+
+test("deafened with someone talking: their decoder is kept and their speaking indicator does not blink", () => {
+  const opusListeners = new Set<(userId: string, opus: Uint8Array) => void>();
+  let clock = 0;
+  let deaf = false;
+  let destroyed = 0;
+  const speaking: string[] = [];
+  createReceiver({
+    session: { onOpus: (fn) => (opusListeners.add(fn), () => opusListeners.delete(fn)), onSpeaking: () => () => {} },
+    mixer: { buffer: () => ({ push: () => {}, pop: () => null, size: 0, reset: () => {} }), remove: () => {} },
+    makeDecoder: () => ({ decode: (o: Uint8Array) => o, destroy: () => void (destroyed += 1) }),
+    isDeaf: () => deaf,
+    onSpeaking: (userId, on) => void speaking.push(`${userId}:${on}`),
+    now: () => clock,
+    setTimer: (() => 0) as never,
+    clearTimer: (() => {}) as never,
+  });
+  const send = () => opusListeners.forEach((fn) => fn("a", Uint8Array.of(1, 2, 3, 4)));
+  send();
+  deaf = true;
+  for (let t = 0; t < 3 * 60_000; t += 1_000) {
+    clock = t;
+    send();
+  }
+  expect(speaking).toEqual(["a:true"]);
+  expect(destroyed).toBe(0);
+});
