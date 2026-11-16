@@ -8,6 +8,7 @@ import { createOpusCodec } from "../../voice/opus";
 import { createVad } from "../../voice/vad";
 import type { AudioDevice } from "../../voice/devices";
 import { LevelMeter } from "../components/LevelMeter";
+import { monitorTitle } from "../components/MonitorPicker";
 import { useSelector } from "../store-bridge";
 import { cycleTheme, themeEntries, themeLabel, useTheme } from "../theme";
 import { Button, type Click } from "../components/Button";
@@ -147,6 +148,13 @@ export function SettingsScreen(props: {
     const names: (string | null)[] = [null, ...(monitors() ?? []).map((m) => m.name).filter((n) => n !== "")];
     const index = Math.max(0, names.indexOf(settings().streamMonitor));
     patch({ streamMonitor: names[(index + delta + names.length) % names.length] ?? null });
+  }
+
+  /** El monitor guardado con su modelo (`Legion 27-10 · HDMI-A-1`) si sigue conectado; si no, el conector. */
+  function streamMonitorText(): string {
+    const saved = settings().streamMonitor;
+    if (saved === null) return "preguntar si hay más de uno";
+    return monitorTitle((monitors() ?? []).find((m) => m.name === saved) ?? { name: saved });
   }
 
   function nudgeSensitivity(deltaDb: number): void {
@@ -306,7 +314,7 @@ export function SettingsScreen(props: {
           </box>
         </Show>
         <text fg={theme().header}>Transmitir pantalla</text>
-        {line("streamMonitor", `monitor: ${settings().streamMonitor ?? "preguntar si hay más de uno"}  (h/l)`)}
+        {line("streamMonitor", `monitor: ${streamMonitorText()}  (h/l)`)}
         {line(
           "streamQuality",
           `calidad: ${settings().streamQuality}${settings().streamQuality === "1080p30" ? " (puede necesitar Nitro)" : ""}`,

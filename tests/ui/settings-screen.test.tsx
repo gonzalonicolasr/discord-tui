@@ -127,6 +127,44 @@ describe("SettingsScreen", () => {
     expect(closed).toBe(1);
   });
 
+  test("Go Live monitor row shows the model next to the connector; settings keep only the connector", async () => {
+    const { store, deps } = setup();
+    const actions = {
+      voice: {
+        listMonitors: async () => [
+          { name: "DP-1", width: 1920, height: 1080, focused: true },
+          { name: "HDMI-A-1", width: 1920, height: 1080, focused: false, model: "Legion 27-10" },
+        ],
+      },
+    } as unknown as Actions;
+    store.dispatch({ type: "settings/set", patch: { streamMonitor: "HDMI-A-1" } });
+    const { mockInput, renderOnce, captureCharFrame } = await testRender(
+      () => <SettingsScreen store={store} actions={actions} deps={deps} inVoice={false} onClose={() => {}} />,
+      { width: 90, height: 30 },
+    );
+    await Bun.sleep(5);
+    await renderOnce();
+    expect(captureCharFrame()).toContain("monitor: Legion 27-10 · HDMI-A-1  (h/l)");
+    for (let i = 0; i < 5; i += 1) mockInput.pressKey("j");
+    mockInput.pressKey("h");
+    await renderOnce();
+    expect(store.getState().settings.streamMonitor).toBe("DP-1");
+    expect(captureCharFrame()).toContain("monitor: DP-1  (h/l)");
+  });
+
+  test("a saved monitor that is not connected shows its connector", async () => {
+    const { store, deps } = setup();
+    const actions = { voice: { listMonitors: async () => [{ name: "DP-1", width: 1920, height: 1080, focused: true, model: "Odyssey G40B" }] } } as unknown as Actions;
+    store.dispatch({ type: "settings/set", patch: { streamMonitor: "DP-9" } });
+    const { renderOnce, captureCharFrame } = await testRender(
+      () => <SettingsScreen store={store} actions={actions} deps={deps} inVoice={false} onClose={() => {}} />,
+      { width: 90, height: 30 },
+    );
+    await Bun.sleep(5);
+    await renderOnce();
+    expect(captureCharFrame()).toContain("monitor: DP-9  (h/l)");
+  });
+
   test("Go Live rows: monitor cycles ask → each monitor, quality toggles 720p30/1080p30 with the Nitro note", async () => {
     const { store, deps } = setup();
     const actions = {
