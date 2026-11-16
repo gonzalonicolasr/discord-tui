@@ -2,6 +2,7 @@
  * Sonidos de eventos, sintetizados acá (no son los archivos de Discord): tonos senoidales/triangulares cortos
  * con envolvente suave, en el espíritu de los avisos del cliente oficial pero propios. Todo es PCM s16le
  * estéreo a 48 kHz, cortado en frames de 20 ms (3840 bytes) para poder sumarse al mixer de la llamada.
+ * Lo que suena de verdad son los WAV de src/sounds/wav (library.ts); estos tonos quedan de respaldo.
  */
 import { CHANNELS, FRAME_BYTES, FRAME_MS, FRAME_SAMPLES, SAMPLE_RATE } from "../voice/constants";
 
