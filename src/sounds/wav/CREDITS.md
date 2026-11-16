@@ -44,9 +44,9 @@ Para probar uno: copiarlo encima del principal (`cp alt/join.wav join.wav`) y es
 
 ## Cambios sobre el original
 
-Los originales son Ogg Vorbis a 44,1 kHz, mono salvo `phaserDown3.ogg` (estéreo, se pasó a mono). Con ffmpeg
-(solo al convertir, no en ejecución) se pasaron a WAV PCM s16 estéreo a 48 kHz (el formato del mixer de la
-llamada; los dos canales iguales) y además:
+Los originales son Ogg Vorbis a 44,1 kHz, mono salvo `phaserDown3.ogg` y `phaserDown1.ogg` (estéreo, se
+pasaron a mono). Con ffmpeg (solo al convertir, no en ejecución) se pasaron a WAV PCM s16 estéreo a 48 kHz
+(el formato del mixer de la llamada; los dos canales iguales) y además:
 
 - recorte del silencio de los bordes (todo lo que está 45 dB por debajo del pico);
 - fundido de entrada de 4 ms y de salida de 12 ms (medio coseno), para que no hagan click al mezclarse;
