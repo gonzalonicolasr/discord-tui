@@ -23,6 +23,11 @@ export interface Monitor {
   width: number;
   height: number;
   focused: boolean;
+  /**
+   * Nombre para mostrar (`Legion 27-10`): el `model` de hyprctl o, si falta, la `description` sin el serial.
+   * Viene de afuera (EDID): solo para mostrar, nunca va a un comando (ahí va `name`, validado con MONITOR_NAME).
+   */
+  model?: string;
 }
 
 export interface Quality {
@@ -95,6 +100,30 @@ export function pickBackend(which: (bin: string) => boolean): CaptureBackend | n
   return null;
 }
 
+/** Largo máximo (en caracteres) del nombre para mostrar de un monitor. */
+export const MONITOR_MODEL_MAX = 40;
+
+/** Texto del monitor para mostrar: sin caracteres de control ni de formato (escapes, bidi), espacios juntos, recortado. */
+function cleanMonitorText(raw: unknown): string {
+  if (typeof raw !== "string") return "";
+  const clean = raw
+    .replace(/[\t\n\v\f\r]/g, " ")
+    .replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return [...clean].slice(0, MONITOR_MODEL_MAX).join("").trimEnd();
+}
+
+/** `model`; si falta, `description` sin el serial del final; si tampoco, nada. */
+function monitorModel(m: { model?: unknown; description?: unknown; serial?: unknown }): string | undefined {
+  const model = cleanMonitorText(m.model);
+  if (model) return model;
+  let description = typeof m.description === "string" ? m.description.trim() : "";
+  const serial = typeof m.serial === "string" ? m.serial.trim() : "";
+  if (serial && description.endsWith(serial)) description = description.slice(0, -serial.length);
+  return cleanMonitorText(description) || undefined;
+}
+
 /** `hyprctl monitors -j` → monitores; descarta los raros. */
 export function parseHyprMonitors(raw: unknown): Monitor[] {
   if (!Array.isArray(raw)) return [];
@@ -102,11 +131,13 @@ export function parseHyprMonitors(raw: unknown): Monitor[] {
   for (const m of raw) {
     if (typeof m?.name !== "string" || !MONITOR_NAME.test(m.name)) continue;
     if (m.disabled === true) continue;
+    const model = monitorModel(m);
     out.push({
       name: m.name,
       width: typeof m.width === "number" ? m.width : 0,
       height: typeof m.height === "number" ? m.height : 0,
       focused: m.focused === true,
+      ...(model ? { model } : {}),
     });
   }
   return out;

@@ -9,6 +9,7 @@ import {
   ffmpegArgs,
   grimCommand,
   listMonitors,
+  MONITOR_MODEL_MAX,
   parseHyprMonitors,
   pickBackend,
   pickEncoder,
@@ -45,6 +46,41 @@ describe("monitors", () => {
       { name: "DP-1", width: 1920, height: 1080, focused: true },
     ]);
     expect(parseHyprMonitors({})).toEqual([]);
+  });
+
+  test("a display name from model; without it, the description minus the serial; without both, none", () => {
+    const raw = [
+      { name: "HDMI-A-1", make: "Lenovo Group Limited", model: "Legion 27-10", serial: "V5ABC123", description: "Lenovo Group Limited Legion 27-10 V5ABC123", width: 1920, height: 1080 },
+      { name: "DP-1", make: "Samsung Electric Company", model: "", serial: "HNTW600000", description: "Samsung Electric Company Odyssey G40B HNTW600000", width: 1920, height: 1080 },
+      { name: "DP-3", description: "Acer Technologies KG251Q", width: 1920, height: 1080 },
+      { name: "DP-2", model: "   ", description: "", width: 1920, height: 1080 },
+      { name: "DP-4", width: 1920, height: 1080 },
+    ];
+    expect(parseHyprMonitors(raw).map((m) => m.model)).toEqual([
+      "Legion 27-10",
+      "Samsung Electric Company Odyssey G40B",
+      "Acer Technologies KG251Q",
+      undefined,
+      undefined,
+    ]);
+  });
+
+  test("the display name loses control and escape characters, and long ones are cut", () => {
+    const raw = [
+      { name: "DP-1", model: "Leg\u001b]0;pwned\u0007ion\u001b[31m 27\u009b2J\u202e-10\n\t", width: 1, height: 1 },
+      { name: "DP-2", model: "X".repeat(500), width: 1, height: 1 },
+      { name: "DP-3", model: "\u001b\u0000\u200b", description: "Acer KG251Q", width: 1, height: 1 },
+      { name: "DP-4", model: 42, description: { x: 1 }, width: 1, height: 1 },
+    ];
+    const [weird, long, onlyControl, notText] = parseHyprMonitors(raw);
+    expect(weird!.model).not.toMatch(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e]/);
+    expect(weird!.model).toBe("Leg]0;pwnedion[31m 272J-10");
+    expect([...long!.model!].length).toBe(MONITOR_MODEL_MAX);
+    expect(onlyControl!.model).toBe("Acer KG251Q");
+    expect(notText!.model).toBeUndefined();
+    // el comando sigue usando solo el conector validado
+    expect(wfRecorderCommand(weird!.name, { fps: 30 })).toContain("DP-1");
+    expect(wfRecorderCommand(weird!.name, { fps: 30 }).join(" ")).not.toContain("Leg");
   });
 
   function envWith(stdout: string, tools = ["hyprctl"]): CaptureEnv {
