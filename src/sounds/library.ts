@@ -7,7 +7,7 @@ import { join } from "node:path";
 
 import { log } from "../log/logger";
 import { FRAME_MS } from "../voice/constants";
-import { renderCue, type Cue } from "./synth";
+import { CUES, renderCue, type Cue } from "./synth";
 import { MAX_WAV_BYTES, WavError, parseWav, wavFrames } from "./wav";
 
 /**
@@ -24,6 +24,8 @@ export interface CueLibrary {
   /** Frames de 20 ms (3840 bytes, s16le estéreo 48 kHz) del cue. */
   frames(cue: Cue): Uint8Array[];
   durationMs(cue: Cue): number;
+  /** Lee y valida los 12 de una vez (la lectura es síncrona): así el primer sonido no toca el disco. */
+  preload(): void;
 }
 
 function readLimited(path: string): Uint8Array {
@@ -61,7 +63,13 @@ export function createCueLibrary(opts: {
     return out;
   }
 
-  return { frames, durationMs: (cue) => frames(cue).length * FRAME_MS };
+  return {
+    frames,
+    durationMs: (cue) => frames(cue).length * FRAME_MS,
+    preload: () => {
+      for (const cue of CUES) frames(cue);
+    },
+  };
 }
 
 let shared: CueLibrary | null = null;
@@ -78,4 +86,19 @@ export function cueFrames(cue: Cue): Uint8Array[] {
 
 export function cueDurationMs(cue: Cue): number {
   return library().durationMs(cue);
+}
+
+/** Espera antes de precargar: después del primer dibujado, mucho antes de que se pueda entrar a una llamada. */
+const PRELOAD_DELAY_MS = 250;
+
+/**
+ * Precarga los sonidos al arrancar, diferido para no frenar el arranque. Sin esto, la primera vez que suena
+ * cada uno se lee del disco en el hilo principal (hasta ~24 ms con el disco frío, justo al entrar a la llamada).
+ */
+export function preloadCuesLater(
+  opts: { schedule?: (fn: () => void, ms: number) => void; preload?: () => void } = {},
+): void {
+  const preload = opts.preload ?? ((): void => library().preload());
+  const schedule = opts.schedule ?? ((fn: () => void, ms: number): void => void setTimeout(fn, ms).unref());
+  schedule(preload, PRELOAD_DELAY_MS);
 }

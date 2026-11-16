@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createCueLibrary, cueDurationMs, cueFrames, defaultSoundsDir } from "../../src/sounds/library";
+import { createCueLibrary, cueDurationMs, cueFrames, defaultSoundsDir, preloadCuesLater } from "../../src/sounds/library";
 import { CUES, PEAK, renderCue, type Cue } from "../../src/sounds/synth";
 import { parseWav } from "../../src/sounds/wav";
 import { sampleAt } from "../helpers/pcm";
@@ -84,6 +84,37 @@ describe("cue library: fallback to the synthesized cue", () => {
     expect(lib.frames("message")).toBe(frames);
     expect(lib.durationMs("message")).toBe(100);
     expect(warnings).toEqual([]);
+  });
+});
+
+describe("cue library: preload", () => {
+  test("preload reads the 12 files once, so the first play does not touch the disk", () => {
+    const reads: string[] = [];
+    const wav = makeWav({ ms: 60, sample: 100 });
+    const lib = createCueLibrary({ dir: "/sounds", readFile: (path) => (reads.push(path), wav), warn: () => {} });
+    lib.preload();
+    expect(reads).toHaveLength(CUES.length);
+    for (const cue of CUES) lib.frames(cue);
+    expect(reads).toHaveLength(CUES.length);
+  });
+
+  test("a broken file during preload still falls back to the synth cue, logged once", () => {
+    const warnings: string[] = [];
+    const lib = createCueLibrary({ dir: join(tempDir(), "nope"), warn: (cue) => warnings.push(cue) });
+    lib.preload();
+    expect(lib.frames("join")).toEqual(renderCue("join"));
+    expect(warnings).toEqual([...CUES]);
+  });
+
+  test("at startup the preload is deferred: scheduled, not run on the spot", () => {
+    const scheduled: { fn: () => void; ms: number }[] = [];
+    let ran = 0;
+    preloadCuesLater({ schedule: (fn, ms) => void scheduled.push({ fn, ms }), preload: () => (ran += 1) });
+    expect(ran).toBe(0);
+    expect(scheduled).toHaveLength(1);
+    expect(scheduled[0]!.ms).toBeGreaterThan(0);
+    scheduled[0]!.fn();
+    expect(ran).toBe(1);
   });
 });
 

@@ -28,6 +28,7 @@ import { createDjsVoiceSession, type VoiceSession } from "../voice/session";
 import { createVad } from "../voice/vad";
 import { listAudioDevices } from "../voice/devices";
 import { attachVoiceSounds, peerCue } from "../sounds/events";
+import { preloadCuesLater } from "../sounds/library";
 import { createSoundPlayer, type SoundPlayer } from "../sounds/player";
 
 export interface RuntimeDeps {
@@ -273,6 +274,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     start(): void {
       gateway.connect();
       idle.activity();
+      if (!deps.sounds) preloadCuesLater();
     },
     async stop(): Promise<void> {
       stopUpdateChecks();
