@@ -7,6 +7,7 @@ import { createCueLibrary, cueDurationMs, cueFrames, defaultSoundsDir } from "..
 import { CUES, PEAK, renderCue, type Cue } from "../../src/sounds/synth";
 import { parseWav } from "../../src/sounds/wav";
 import { sampleAt } from "../helpers/pcm";
+import { loudness } from "../helpers/loudness";
 import { makeWav } from "../helpers/wav";
 
 function samples(frames: Uint8Array[]): number[] {
@@ -15,10 +16,8 @@ function samples(frames: Uint8Array[]): number[] {
   return out;
 }
 
-function rms(s: number[]): number {
-  const loud = s.filter((v) => Math.abs(v) > 30);
-  return Math.sqrt(loud.reduce((n, v) => n + v * v, 0) / Math.max(1, loud.length));
-}
+/** Sonoridad a la que se normalizaron los WAV al convertirlos (ver CREDITS.md). */
+const TARGET_LUFS = -21.7;
 
 function tempDir(): string {
   return mkdtempSync(join(tmpdir(), "zcord-sounds-"));
@@ -131,15 +130,15 @@ describe("shipped sounds (src/sounds/wav)", () => {
     });
   }
 
-  test("the same loudness for all, and someone else joining/leaving is quieter than your own join/leave", () => {
-    const own = CUES.filter((c) => c !== "userJoin" && c !== "userLeave").map((c) => rms(samples(lib.frames(c))));
-    // RMS no es sonoridad percibida (esa se igualó con K-weighting al convertir), pero tampoco se separa más de 6 dB.
-    const spread = 20 * Math.log10(Math.max(...own) / Math.min(...own));
-    expect(spread).toBeLessThan(6);
-    for (const peer of ["userJoin", "userLeave"] as const) {
-      expect(rms(samples(lib.frames(peer)))).toBeLessThan(rms(samples(lib.frames("join"))));
-    }
-  });
+  for (const cue of CUES) {
+    const target = cue === "userJoin" || cue === "userLeave" ? TARGET_LUFS - 3 : TARGET_LUFS;
+    test(`${cue}: at the loudness it was normalized to, ${target} LUFS ±1 dB`, () => {
+      // Canal izquierdo (los dos son iguales), de −1 a 1.
+      const left = samples(lib.frames(cue)).filter((_, i) => i % 2 === 0);
+      const measured = loudness(Float64Array.from(left, (v) => v / 32767));
+      expect(Math.abs(measured - target)).toBeLessThanOrEqual(1);
+    });
+  }
 
   test("the files themselves are 48 kHz stereo s16 PCM WAV", async () => {
     for (const cue of CUES) {
