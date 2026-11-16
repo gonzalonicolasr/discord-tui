@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 
 import { DEFAULT_SETTINGS, type SoundSettings } from "../../src/settings/settings";
 import { createSoundPlayer } from "../../src/sounds/player";
-import { renderCue, type Cue } from "../../src/sounds/synth";
+import { cueFrames } from "../../src/sounds/library";
+import type { Cue } from "../../src/sounds/synth";
 import { startPlayback, type SpawnLike } from "../../src/voice/audio-io";
 import { sampleAt } from "../helpers/pcm";
 
@@ -67,7 +68,7 @@ describe("sound player", () => {
     h.player.play("join");
     await flush();
     expect(h.mixed).toHaveLength(1);
-    expect(h.mixed[0]!.length).toBe(renderCue("join").length);
+    expect(h.mixed[0]!.length).toBe(cueFrames("join").length);
     expect(h.fake.calls).toHaveLength(0);
   });
 
@@ -80,7 +81,7 @@ describe("sound player", () => {
     expect(call.cmd.slice(0, 2)).toEqual(["pw-cat", "--playback"]);
     expect(call.cmd[call.cmd.indexOf("--target") + 1]).toBe("alsa_output.usb-headset");
     const total = call.writes.reduce((n, w) => n + w.byteLength, 0);
-    expect(total).toBe(renderCue("leave").length * 3840);
+    expect(total).toBe(cueFrames("leave").length * 3840);
     expect(call.ended).toBe(true);
   });
 

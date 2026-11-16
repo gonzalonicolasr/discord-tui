@@ -5,7 +5,8 @@
 import { log } from "../log/logger";
 import type { SoundSettings } from "../settings/settings";
 import { applyGain } from "../voice/gain";
-import { cueDurationMs, renderCue, type Cue } from "./synth";
+import { cueDurationMs, cueFrames } from "./library";
+import type { Cue } from "./synth";
 
 export interface SoundSink {
   play(frames: Uint8Array[]): void;
@@ -61,7 +62,7 @@ export function createSoundPlayer(deps: {
       const last = lastPlayed.get(cue);
       if (last !== undefined && t - last < DEDUPE_MS) return;
 
-      const base = renderCue(cue);
+      const base = cueFrames(cue);
       const frames = sounds.volume === 100 ? base : base.map((frame) => applyGain(frame, sounds.volume));
       const sink = deps.mixerSink?.() ?? null;
       if (sink) {
