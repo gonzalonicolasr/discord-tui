@@ -186,7 +186,8 @@ export class H264Depacketizer {
    */
   constructor(
     private readonly onLoss: () => void = () => {},
-    private readonly waitMs = 0,
+    /** Se puede bajar a 0 en marcha (el visor lo hace si el SFU no atiende el NACK). */
+    public waitMs = 0,
     private readonly now: () => number = () => performance.now(),
   ) {}
 

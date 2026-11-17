@@ -15,6 +15,16 @@ export const NACK_MAX_TRIES = 4;
 export const NACK_GIVE_UP_MS = 350;
 /** Un salto mayor (o más faltantes juntos) no es pérdida a recuperar: se reinicia la cuenta. */
 export const NACK_MAX_MISSING = 1000;
+/**
+ * Ventana creíble de un reenvío: llega al menos RESEND_MIN_MS después del PRIMER pedido de ese número (y antes de que
+ * se lo abandone, NACK_GIVE_UP_MS desde que se notó el hueco). Una respuesta tiene que hacer el viaje de ida y vuelta
+ * al SFU por internet (Wi-Fi + ISP + Discord: bastante más de 5 ms); lo que llega antes ya venía en camino antes del
+ * NACK, o sea es el original demorado, no una respuesta. Se mide desde el primer pedido y no desde el último porque
+ * con un RTT mayor que NACK_INTERVAL_MS la respuesta al 1.er pedido llega después del 2.º.
+ */
+export const RESEND_MIN_MS = 5;
+/** Tras pedir esta cantidad de números distintos, si respondió menos de 1 de cada 10, el SFU no atiende el NACK. */
+export const NACK_USELESS_AFTER = 50;
 
 const seqDiff = (a: number, b: number): number => ((a - b + 0x8000) & 0xffff) - 0x8000;
 
@@ -43,19 +53,33 @@ export function nackPacket(sender: number, media: number, seqs: number[]): Buffe
 /** Números de secuencia que faltan de un SSRC y cuándo pedirlos. */
 export class NackTracker {
   private highest: number | null = null;
-  private missing = new Map<number, { since: number; sentAt: number; tries: number }>();
+  private missing = new Map<number, { since: number; sentAt: number; firstSentAt: number; tries: number }>();
+  /** Números distintos pedidos al menos una vez, y cuántos de ellos llegaron en la ventana creíble de reenvío. */
+  asked = 0;
+  answered = 0;
+  /** Demora desde el primer pedido de los que llegaron en la ventana (los últimos 32): un SFU que responde los agrupa cerca del RTT. */
+  private delays: number[] = [];
 
   constructor(private readonly now: () => number = () => performance.now()) {}
 
   /**
-   * Anota un paquete que llegó. Si era uno de los que faltaban: "resent" si ya lo habíamos pedido (la respuesta al
-   * NACK, o uno que llegó muy tarde) o "late" si llegó desordenado antes de pedirlo. null si no faltaba.
+   * Anota un paquete que llegó. Si era uno de los que faltaban:
+   *   "resent"  ya lo habíamos pedido y llegó en la ventana creíble de reenvío (RESEND_MIN_MS o más después del 1.er pedido)
+   *   "stray"   ya lo habíamos pedido pero llegó antes de esa ventana: el original demorado, no una respuesta
+   *   "late"    llegó desordenado antes de pedirlo
+   * null si no faltaba.
    */
-  received(seq: number): "resent" | "late" | null {
+  received(seq: number): "resent" | "stray" | "late" | null {
     const m = this.missing.get(seq);
     if (m) {
       this.missing.delete(seq);
-      return m.tries > 0 ? "resent" : "late";
+      if (m.tries === 0) return "late";
+      const dt = this.now() - m.firstSentAt;
+      if (dt < RESEND_MIN_MS) return "stray";
+      this.answered++;
+      this.delays.push(dt);
+      if (this.delays.length > 32) this.delays.shift();
+      return "resent";
     }
     if (this.highest === null) {
       this.highest = seq;
@@ -66,7 +90,7 @@ export class NackTracker {
     if (d > NACK_MAX_MISSING || this.missing.size + d > NACK_MAX_MISSING) this.missing.clear();
     else {
       const t = this.now();
-      for (let i = 1; i < d; i++) this.missing.set((this.highest + i) & 0xffff, { since: t, sentAt: -Infinity, tries: 0 });
+      for (let i = 1; i < d; i++) this.missing.set((this.highest + i) & 0xffff, { since: t, sentAt: -Infinity, firstSentAt: 0, tries: 0 });
     }
     this.highest = seq;
     return null;
@@ -82,11 +106,27 @@ export class NackTracker {
         continue;
       }
       if (t - m.since < NACK_REORDER_MS || t - m.sentAt < NACK_INTERVAL_MS) continue;
+      if (m.tries === 0) {
+        m.firstSentAt = t;
+        this.asked++;
+      }
       m.sentAt = t;
       m.tries++;
       out.push(seq);
     }
     return out;
+  }
+
+  /** El SFU no atiende el NACK: ya se pidieron NACK_USELESS_AFTER números y respondió menos de 1 de cada 10. */
+  get useless(): boolean {
+    return this.asked >= NACK_USELESS_AFTER && this.answered * 10 < this.asked;
+  }
+
+  /** Demora de los reenvíos desde el primer pedido, "mín/mediana/máx" en ms ("-" sin ninguno). */
+  delaySummary(): string {
+    if (!this.delays.length) return "-";
+    const d = [...this.delays].sort((a, b) => a - b);
+    return `${Math.round(d[0]!)}/${Math.round(d[d.length >> 1]!)}/${Math.round(d[d.length - 1]!)}`;
   }
 
   /** Cuántos faltan ahora (para tests y diagnóstico). */

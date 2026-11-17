@@ -191,6 +191,19 @@ describe("depacketizer waiting for retransmissions (waitMs)", () => {
     expect(d.lost.late).toBe(1);
   });
 
+  test("lowering waitMs to 0 on the fly (the viewer does it when NACK is useless) drops a waiting frame on the next tick", () => {
+    const { d, losses } = setup();
+    d.push(pkt({ seq: 1, ts: 0, marker: true, payload: IDR }));
+    d.push(pkt({ seq: 3, ts: 3000, marker: true, payload: P })); // seq 2 perdido
+    d.push(pkt({ seq: 4, ts: 6000, marker: true, payload: P }));
+    expect(d.tick()).toEqual([]);
+    expect(d.dropped).toBe(0); // esperando el reenvío
+    d.waitMs = 0;
+    d.tick();
+    expect(d.dropped).toBe(1);
+    expect(losses()).toBe(1);
+  });
+
   test("memory is capped: with too many frames pending it stops waiting even before waitMs", () => {
     const { d, losses } = setup();
     d.push(pkt({ seq: 1, ts: 0, marker: true, payload: IDR }));
