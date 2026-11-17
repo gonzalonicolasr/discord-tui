@@ -20,6 +20,8 @@
  *     tira: el RtcpNackResponder de la librería nunca veía un NACK (medido en loopback: 0 de 4 contra 4 de 4).
  *   - se anota lo negociado en el op 4 y en los op 14 para golive.stats (stats.ts, `recordNegotiated`) y se avisa
  *     (`onCodec`) qué códec de video eligió el servidor.
+ *   - al cortar no se reanuda (`noResumeAfterStop`): la librería tomaba su propio cierre (código 1000) como un corte
+ *     reanudable y volvía a abrir el WS con op 7 RESUME del stream que acabábamos de borrar.
  *   - el op 1 SELECT_PROTOCOL ofrece solo H264 + opus (`onlyH264`): la librería ofrece H264, H265, VP8, VP9 y AV1 con la
  *     misma prioridad, el servidor elige el códec de cada emisor, y ella siempre manda lo que sale de ffmpeg (H264)
  *     sin mirar el `video_codec` del op 4. Si el servidor eligiera otro, los que miran no podrían decodificar.
@@ -106,6 +108,7 @@ export function createGoLiveShim(deps: { gateway: ShimGateway; meId: string; lib
     if (media) {
       declareVideoSsrc(media);
       onlyH264(media);
+      noResumeAfterStop(media);
       recordNegotiated(media, deps.onCodec);
     }
     return created;
@@ -179,5 +182,23 @@ export function onlyH264(media: any): void {
       d = data;
     }
     return sendOpcode.call(this, code, d);
+  };
+}
+
+/**
+ * `stop()` de la StreamConnection sin la reconexión: su manejador de "close" reanuda (op 7 RESUME) si el código es
+ * < 4000 y la conexión figuraba iniciada, y el cierre que hace `stop()` es 1000. Se marca como no iniciada antes de
+ * cerrar: el manejador va por la rama de "cerrado del todo". Los cortes que no pedimos se siguen reanudando igual.
+ */
+export function noResumeAfterStop(media: any): void {
+  const stop = media?.stop;
+  if (typeof stop !== "function") return;
+  media.stop = function (this: unknown, ...args: unknown[]) {
+    try {
+      if (media.status && typeof media.status === "object") media.status.started = false;
+    } catch {
+      // forma inesperada: se corta como antes
+    }
+    return stop.apply(this, args);
   };
 }

@@ -108,6 +108,12 @@ describe("shim over our gateway with our voice session", () => {
     expect(gw.sent.filter((s) => s.op === 19)).toEqual([{ op: 19, d: { stream_key: KEY } }]);
     expect(gw.listenerCount("dispatch")).toBe(before - 1);
   });
+
+  test("after destroy the library does not reconnect to RESUME the stream it just stopped", async () => {
+    await Bun.sleep(1000);
+    expect(server.ops.some((o) => o.op === 7)).toBe(false);
+    expect(server.connections()).toBe(1);
+  });
 });
 
 test("the shim blocks any op other than 18/19/22", () => {

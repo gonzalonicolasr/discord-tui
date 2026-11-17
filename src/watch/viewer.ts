@@ -12,6 +12,7 @@
  */
 import { randomUUID } from "node:crypto";
 
+import { noResumeAfterStop } from "../golive/shim";
 import { negotiatedOf } from "../golive/stats";
 import { H264Depacketizer, RtpH264Stats, parseRtp } from "./h264";
 
@@ -344,6 +345,7 @@ export function createViewerConnection(lib: ViewerLib, p: ViewerParams, events: 
   }
 
   conn = new Viewer(null, p.guildId, p.meId, p.channelId, () => {});
+  noResumeAfterStop(conn); // al dejar de mirar, la librería no reabre el WS con op 7 RESUME
   conn.serverId = p.rtcServerId;
   conn.streamKey = p.streamKey;
   conn.setSession(p.sessionId);

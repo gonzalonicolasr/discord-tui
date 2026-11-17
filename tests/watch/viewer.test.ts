@@ -172,6 +172,14 @@ function describe_e2e() {
     expect(viewerRtcp.has("205/1")).toBe(false); // sin NACK
   });
 
+  test.skipIf(!hasFfmpeg)("stopping the viewer does not make the library reconnect and RESUME it", async () => {
+    const conns = server.connections();
+    viewer!.stop();
+    await Bun.sleep(1000);
+    expect(server.ops.some((o) => o.op === 7)).toBe(false);
+    expect(server.connections()).toBe(conns);
+  });
+
   test.skipIf(!hasFfmpeg)("the viewer never sends media attributes of its own (no op 12 from it)", () => {
     // El emisor manda sus op 12; el que mira, ninguno: cuenta los identify (2) contra los que mandaron op 12 activos (1).
     const activeVideo = server.ops.filter((o) => o.op === 12 && o.d?.streams?.some((s: any) => s.active));
