@@ -112,6 +112,10 @@ function describe_e2e() {
         onUnsupportedCodec: () => {},
       },
     );
+    // El keyframe del op 12 sale solo si el track ya está abierto, y el siguiente depende de la fase del GOP: se pide uno
+    // con el track abierto para que el feedback (FIR + PLI) no dependa de cuándo entró el viewer.
+    for (let i = 0; i < 100 && viewer.diag!().track !== true; i++) await Bun.sleep(20);
+    viewer.requestKeyframe();
     await Bun.sleep(3000);
     await chain;
     decoder.close();
