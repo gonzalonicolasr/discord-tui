@@ -20,7 +20,8 @@
  *                "audio" = al revés; "both" = no sale nada; "no"; "none-yet" = todavía no salió nada
  *   rtc          estado del PeerConnection (connected, connecting, closed…)
  *   dave / dave_v  DAVE listo (1/0) y versión del protocolo negociada
- *   in / out     ops del WS del stream desde la línea anterior ({"6":2} = dos op 6; "b25" = binario op 25)
+ *   in / out     ops del WS del stream desde la línea anterior ({"6":2} = dos op 6; "b25" = binario op 25;
+ *                "?" = un mensaje de texto que no empieza con su op)
  *   ws           cuántos WS del stream se vieron (más de 1 = la librería reconectó)
  */
 import type { Logger } from "../log/logger";
@@ -43,12 +44,17 @@ export interface StreamStats {
   stop(why: string): void;
 }
 
+/**
+ * El número de op de un mensaje de texto, SIN parsearlo: el identify del stream lleva el token y no hace falta
+ * materializar nada del payload. La librería y Discord mandan `{"op":N,…}` (a veces con `"seq":M` antes); se mira
+ * solo esa clave al principio, con una expresión anclada. Cualquier otra forma cuenta como "?" (nunca se adivina el
+ * op desde adentro del payload).
+ */
+const LEADING_OP = /^\s*\{\s*(?:"seq"\s*:\s*\d{1,10}\s*,\s*)?"op"\s*:\s*(\d{1,4})\s*[,}]/;
+
 function opOf(data: unknown, binaryOpAt: number): string | null {
   try {
-    if (typeof data === "string") {
-      const op = JSON.parse(data)?.op;
-      return typeof op === "number" ? String(op) : null;
-    }
+    if (typeof data === "string") return LEADING_OP.exec(data)?.[1] ?? "?";
     const bytes =
       data instanceof ArrayBuffer ? new Uint8Array(data) : ArrayBuffer.isView(data) ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength) : null;
     if (!bytes || bytes.length <= binaryOpAt) return null;

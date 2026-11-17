@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { watchStream } from "../../src/golive/stats";
+import { fakeToken } from "../helpers/fake-token";
 
 /** WS falso con la forma de lo que usa la librería: addEventListener("message"/"close") y send(). */
 function fakeWs() {
@@ -299,5 +300,50 @@ describe("go live stats count what the library really sent", () => {
     conn.sendAudioFrame(Buffer.alloc(1), 20);
     stats.report();
     expect(JSON.parse(lines.at(-1).msg)).toMatchObject({ v: 0, vd: 1, a: 1, ad: 0 });
+  });
+});
+
+// El identify del stream lleva el token: el diagnóstico saca solo el número de op, sin materializar el mensaje.
+describe("go live stats read only the op number", () => {
+  test("outgoing identify and incoming messages are never parsed, kept or logged beyond their op number", () => {
+    const token = fakeToken("golive-stats");
+    const lines: any[] = [];
+    const conn = fakeConn();
+    const ws = conn.mediaConnection.ws;
+    const stats = watchStream(conn, { log: { info: (e, f) => void lines.push({ e, f }) }, intervalMs: 0 });
+    const realParse = JSON.parse;
+    let parsedOurs = 0;
+    JSON.parse = ((text: string, ...rest: any[]) => {
+      if (typeof text === "string" && text.includes(token)) parsedOurs++;
+      return (realParse as any)(text, ...rest);
+    }) as typeof JSON.parse;
+    try {
+      ws.send(JSON.stringify({ op: 0, d: { server_id: "1", session_id: "secret-session", token, video: true } }));
+      ws.receive(JSON.stringify({ op: 4, d: { sdp: `a=ice-pwd:${token}`, dave_protocol_version: 1 } }));
+      ws.receive(`{"seq":12,"op":5,"d":{"user_id":"123","token":"${token}"}}`);
+    } finally {
+      JSON.parse = realParse;
+    }
+    expect(parsedOurs).toBe(0);
+    stats.report();
+    const text = JSON.stringify(lines);
+    expect(text).not.toContain(token);
+    expect(text).not.toContain("secret-session");
+    expect(text).not.toContain("ice-pwd");
+    expect(text).not.toContain("user_id");
+    expect(realParse(lines.at(-1).f.msg)).toMatchObject({ out: { "0": 1 }, in: { "4": 1, "5": 1 } });
+    expect(ws.sent[0]).toContain(token); // el mensaje igual sale entero
+  });
+
+  test("an op that is not the leading key is not guessed from inside the payload", () => {
+    const lines: any[] = [];
+    const conn = fakeConn();
+    const ws = conn.mediaConnection.ws;
+    const stats = watchStream(conn, { log: { info: (_e, f) => void lines.push(f) }, intervalMs: 0 });
+    ws.receive('{"d":{"op":99},"op":5}');
+    ws.receive("not json");
+    ws.receive('{"op":12345678,"d":{}}');
+    stats.report();
+    expect(JSON.parse(lines.at(-1).msg).in).toEqual({ "?": 3 });
   });
 });
