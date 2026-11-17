@@ -167,6 +167,7 @@ test.skipIf(!hasFfmpeg)("the viewer's Generic NACK goes out over the wire for th
   expect([...nacked].filter((seq) => !dropped.has(seq))).toEqual([]);
   expect(diagAtEnd.nackPkts).toBeGreaterThan(0);
   expect(diagAtEnd.nackSent).toBeGreaterThanOrEqual(expected.length);
+  expect(JSON.stringify(diagAtEnd).length).toBeLessThan(1200); // watch.ts corta la línea del log en 1200
 });
 
 test.skipIf(!hasFfmpeg)("libdatachannel unwraps the RTX itself (only PT 101 reaches onMessage) and the keyframes complete with it", () => {
