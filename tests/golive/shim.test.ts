@@ -184,3 +184,32 @@ describe("declareSsrc: false (ZCORD_GOLIVE_SSRC=0)", () => {
     expect(select.sdp).not.toMatch(/^a=ssrc:/m);
   });
 });
+
+describe("noResumeAfterStop only skips the resume of OUR stop: drops we did not ask for still resume", () => {
+  for (const [code, resumes] of [
+    [1001, true],
+    [4015, true],
+    [4014, false],
+  ] as const) {
+    test(`the server closes the stream WS with ${code}: ${resumes ? "op 7 RESUME on a new connection" : "no resume"}`, async () => {
+      const gw = fakeGateway();
+      const srv = startFakeStreamServer();
+      const shim = createGoLiveShim({ gateway: gw, meId: ME, lib });
+      try {
+        shim.attachVoice(GUILD, CHANNEL, OUR_SESSION);
+        const ready = shim.streamer.createStream();
+        gw.dispatch("STREAM_CREATE", { stream_key: KEY, rtc_server_id: RTC_SERVER_ID, viewer_ids: [], paused: false });
+        gw.dispatch("STREAM_SERVER_UPDATE", { stream_key: KEY, endpoint: srv.endpoint, token: "stream-token-falso" });
+        await Promise.race([ready, Bun.sleep(5000)]);
+        srv.closeWith(code);
+        for (let i = 0; i < 50 && srv.ops.filter((o) => o.op === 7).length === 0; i++) await Bun.sleep(20);
+        if (!resumes) await Bun.sleep(500);
+        expect(srv.ops.filter((o) => o.op === 7).length).toBe(resumes ? 1 : 0);
+        expect(srv.connections()).toBe(resumes ? 2 : 1);
+      } finally {
+        shim.destroy();
+        srv.stop();
+      }
+    });
+  }
+});
