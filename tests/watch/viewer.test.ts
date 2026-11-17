@@ -134,6 +134,22 @@ function describe_e2e() {
     expect(closes).toEqual([]);
   });
 
+  test.skipIf(!hasFfmpeg)("watch.diag says what codec, DAVE version and NAL types arrived (numbers only, no SDP or ids)", () => {
+    const d = viewer!.diag!();
+    expect(d.neg).toBe("H264/opus/v0/?");
+    expect(d.pt).toMatch(/^101:\d+/);
+    const rx = d.rx as Record<string, unknown>;
+    expect(rx.n).toBeGreaterThan(100);
+    expect(rx.mk).toBeGreaterThan(30);
+    expect(String(rx.fu)).toMatch(/(^|,)5:\d+/); // los IDR llegan partidos en FU-A
+    expect(rx.fuS).toBeGreaterThan(0);
+    expect(rx.fbit).toBe(0);
+    const text = JSON.stringify(d);
+    expect(text).not.toContain("a=");
+    expect(text).not.toContain(STREAMER);
+    expect(text).not.toContain("stream-token");
+  });
+
   test.skipIf(!hasFfmpeg)("the viewer never sends media attributes of its own (no op 12 from it)", () => {
     // El emisor manda sus op 12; el que mira, ninguno: cuenta los identify (2) contra los que mandaron op 12 activos (1).
     const activeVideo = server.ops.filter((o) => o.op === 12 && o.d?.streams?.some((s: any) => s.active));

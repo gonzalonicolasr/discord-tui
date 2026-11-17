@@ -263,7 +263,7 @@ export function createStreamWatcher(deps: {
     const diagTimer = setInterval(() => {
       if (active !== a || !a.conn) return clearInterval(diagTimer);
       const d = a.conn.diag?.() ?? {};
-      log.info("watch.diag", { state: store.getState().voice.watch.status, count: decoded, msg: JSON.stringify(d).slice(0, 400) });
+      log.info("watch.diag", { state: store.getState().voice.watch.status, count: decoded, msg: JSON.stringify(d).slice(0, 1200) });
     }, 2_000);
     (diagTimer as { unref?: () => void }).unref?.();
     decodedCounter = () => decoded++;

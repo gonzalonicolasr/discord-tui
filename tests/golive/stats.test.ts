@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { watchStream } from "../../src/golive/stats";
+import { negotiatedOf, watchStream } from "../../src/golive/stats";
 import { fakeToken } from "../helpers/fake-token";
 
 /** WS falso con la forma de lo que usa la librería: addEventListener("message"/"close") y send(). */
@@ -345,5 +345,20 @@ describe("go live stats read only the op number", () => {
     ws.receive('{"op":12345678,"d":{}}');
     stats.report();
     expect(JSON.parse(lines.at(-1).msg).in).toEqual({ "?": 3 });
+  });
+});
+
+describe("negotiatedOf (select protocol ack, op 4)", () => {
+  test("video codec / audio codec / DAVE version / mode, never the SDP, keys or ids", () => {
+    const token = fakeToken();
+    const d = { sdp: "a=fingerprint:sha-256 AA", secret_key: [1, 2, 3], media_session_id: token, video_codec: "H264", audio_codec: "opus", dave_protocol_version: 1, mode: "aead_aes256_gcm_rtpsize" };
+    expect(negotiatedOf(d)).toBe("H264/opus/v1/aead_aes256_gcm_rtpsize");
+  });
+
+  test("missing or odd values are a question mark (nothing free-form gets into the log)", () => {
+    expect(negotiatedOf({})).toBe("?/?/v?/?");
+    expect(negotiatedOf(null)).toBe("?/?/v?/?");
+    expect(negotiatedOf({ video_codec: "H264 with spaces", audio_codec: "x".repeat(50), dave_protocol_version: "1", mode: 3 })).toBe("?/?/v?/?");
+    expect(negotiatedOf({ video_codec: "AV1", dave_protocol_version: 0 })).toBe("AV1/?/v0/?");
   });
 });

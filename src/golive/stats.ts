@@ -64,6 +64,20 @@ function opOf(data: unknown, binaryOpAt: number): string | null {
   }
 }
 
+/** Un valor del op 4 que puede ir al log: corto y sin espacios ni nada libre (si no, "?"). */
+const SAFE_VALUE = /^[A-Za-z0-9_.-]{1,40}$/;
+const safeValue = (v: unknown): string => (typeof v === "string" && SAFE_VALUE.test(v) ? v : "?");
+
+/**
+ * Lo negociado en el select protocol ack (op 4), para el log: "códec de video/códec de audio/v<DAVE>/modo". Solo esos
+ * cuatro campos; nunca la SDP, claves ni ids.
+ */
+export function negotiatedOf(d: unknown): string {
+  const o = (d && typeof d === "object" ? d : {}) as Record<string, unknown>;
+  const dave = typeof o.dave_protocol_version === "number" && Number.isInteger(o.dave_protocol_version) ? o.dave_protocol_version : "?";
+  return `${safeValue(o.video_codec)}/${safeValue(o.audio_codec)}/v${dave}/${safeValue(o.mode)}`;
+}
+
 export function watchStream(
   conn: any,
   deps: { log: Pick<Logger, "info">; now?: () => number; intervalMs?: number },

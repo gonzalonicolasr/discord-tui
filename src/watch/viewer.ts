@@ -12,7 +12,8 @@
  */
 import { randomUUID } from "node:crypto";
 
-import { H264Depacketizer, parseRtp } from "./h264";
+import { negotiatedOf } from "../golive/stats";
+import { H264Depacketizer, RtpH264Stats, parseRtp } from "./h264";
 
 /** El payload type H264 que ofrece la librería (CodecPayloadType.H264). */
 export const H264_PT = 101;
@@ -143,6 +144,10 @@ export function createViewerConnection(lib: ViewerLib, p: ViewerParams, events: 
   const stats = { packets: 0, frames: 0, dropped: 0, daveFailures: 0 };
   const diag = { ops: new Set<number>(), op12: 0, rtpVideo: 0, rtpOther: 0, rtpOtherSsrc: new Set<number>(), passthroughDrop: 0, notReadyDrop: 0, encrypted: 0, clear: 0, lastPt: -1, pli: 0, pliOk: 0, pliOwn: 0, wants: 0 };
   let ownSsrc = 0;
+  /** Lo que llega por RTP del video que miramos (histograma de NAL, tamaños, saltos) y payload types vistos. */
+  const rx = new RtpH264Stats();
+  const pts = new Map<number, number>();
+  let negotiated = "-";
   // Referencias vivas: Bun junta con el GC los Track/PeerConnection sin referencia JS (spike de Go Live).
   let pc: any = null;
   let videoTrack: any = null;
@@ -215,6 +220,7 @@ export function createViewerConnection(lib: ViewerLib, p: ViewerParams, events: 
     if (!pkt) return;
     stats.packets++;
     diag.lastPt = pkt.payloadType;
+    if (pts.size < 8 || pts.has(pkt.payloadType)) pts.set(pkt.payloadType, (pts.get(pkt.payloadType) ?? 0) + 1);
     if (pkt.payloadType !== H264_PT) return; // RTX y demás: sin NACK no sirven
     if (ssrcs.video && pkt.ssrc !== ssrcs.video) {
       diag.rtpOther++;
@@ -222,6 +228,7 @@ export function createViewerConnection(lib: ViewerLib, p: ViewerParams, events: 
       return;
     }
     diag.rtpVideo++;
+    rx.observe(pkt);
     const keyframesBefore = depack.keyframes;
     const aus = depack.push(pkt);
     if (depack.keyframes !== keyframesBefore) lastKeyframeAt = Date.now();
@@ -295,6 +302,7 @@ export function createViewerConnection(lib: ViewerLib, p: ViewerParams, events: 
     async handleProtocolAck(d: any): Promise<void> {
       if (!d || !("sdp" in d)) throw new Error("Only WebRTC connections are allowed");
       (this as any)._daveProtocolVersion = d.dave_protocol_version;
+      negotiated = negotiatedOf(d);
       this.initDave();
       if (typeof d.video_codec === "string" && d.video_codec !== "H264") events.onUnsupportedCodec(d.video_codec);
       remote = parseRemoteInfo(d.sdp);
@@ -374,6 +382,9 @@ export function createViewerConnection(lib: ViewerLib, p: ViewerParams, events: 
         conceal: depack.concealed,
         pli: `${diag.pliOk}/${diag.pli}/${diag.pliOwn}`,
         wants: diag.wants,
+        neg: negotiated,
+        pt: [...pts.entries()].sort((a, b) => a[0] - b[0]).map(([k, v]) => `${k}:${v}`).join(","),
+        rx: rx.summary(),
       };
     },
     stop() {
