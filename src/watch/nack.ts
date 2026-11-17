@@ -1,10 +1,13 @@
 /**
  * Pedido de reenvío de paquetes perdidos para el visor (RFC 4585 Generic NACK + RFC 4588 RTX), como el cliente
  * oficial. libdatachannel no trae un NACK requester en esta versión: anotamos los números de secuencia que faltan
- * del video y los pedimos agrupados cada tanto, con tope de intentos y de tiempo, para no inundar al SFU.
+ * del video y los pedimos agrupados cada tanto, con tope de intentos y de tiempo, para no inundar al SFU. El RTX
+ * que vuelve lo desenvuelve libdatachannel (llega al track como el paquete original).
  * [sin verificar contra Discord: no se sabe si su SFU atiende nuestros NACK]
  */
 
+/** Espera antes del primer pedido: un paquete apenas desordenado llega solo. */
+export const NACK_REORDER_MS = 15;
 /** Cada cuánto se vuelve a pedir un mismo paquete. */
 export const NACK_INTERVAL_MS = 70;
 /** Intentos por paquete y tiempo máximo desde que se notó que faltaba: después se lo da por perdido. */
@@ -44,22 +47,29 @@ export class NackTracker {
 
   constructor(private readonly now: () => number = () => performance.now()) {}
 
-  /** Anota un paquete que llegó. true si era uno de los que faltaban (un reenvío o uno que llegó tarde). */
-  received(seq: number): boolean {
-    if (this.missing.delete(seq)) return true;
+  /**
+   * Anota un paquete que llegó. Si era uno de los que faltaban: "resent" si ya lo habíamos pedido (la respuesta al
+   * NACK, o uno que llegó muy tarde) o "late" si llegó desordenado antes de pedirlo. null si no faltaba.
+   */
+  received(seq: number): "resent" | "late" | null {
+    const m = this.missing.get(seq);
+    if (m) {
+      this.missing.delete(seq);
+      return m.tries > 0 ? "resent" : "late";
+    }
     if (this.highest === null) {
       this.highest = seq;
-      return false;
+      return null;
     }
     const d = seqDiff(seq, this.highest);
-    if (d <= 0) return false;
+    if (d <= 0) return null;
     if (d > NACK_MAX_MISSING || this.missing.size + d > NACK_MAX_MISSING) this.missing.clear();
     else {
       const t = this.now();
       for (let i = 1; i < d; i++) this.missing.set((this.highest + i) & 0xffff, { since: t, sentAt: -Infinity, tries: 0 });
     }
     this.highest = seq;
-    return false;
+    return null;
   }
 
   /** Los que hay que pedir ahora (en orden); olvida los que ya no vale la pena pedir. */
@@ -71,7 +81,7 @@ export class NackTracker {
         this.missing.delete(seq);
         continue;
       }
-      if (t - m.sentAt < NACK_INTERVAL_MS) continue;
+      if (t - m.since < NACK_REORDER_MS || t - m.sentAt < NACK_INTERVAL_MS) continue;
       m.sentAt = t;
       m.tries++;
       out.push(seq);
@@ -83,10 +93,4 @@ export class NackTracker {
   get pending(): number {
     return this.missing.size;
   }
-}
-
-/** Un paquete RTX (RFC 4588): los 2 primeros bytes del payload son el número de secuencia original. */
-export function unwrapRtx(payload: Uint8Array): { sequence: number; payload: Uint8Array } | null {
-  if (payload.length <= 2) return null; // sondeo de ancho de banda (solo padding) o vacío
-  return { sequence: (payload[0]! << 8) | payload[1]!, payload: payload.subarray(2) };
 }

@@ -176,6 +176,21 @@ describe("depacketizer waiting for retransmissions (waitMs)", () => {
     expect(d.dropped).toBe(0);
   });
 
+  test("each dropped frame is described: packets it had and missing, where they were missing, and which arrived after the drop", () => {
+    const { d, advance } = setup();
+    d.push(pkt({ seq: 1, ts: 0, marker: true, payload: IDR }));
+    const kf = keyframe(2, 3000, 10); // seq 2..11
+    for (const p of kf) if (![2, 6, 11].includes(p.sequence)) d.push(p); // falta principio, medio y final (marker)
+    d.push(pkt({ seq: 12, ts: 6000, marker: true, payload: P }));
+    advance(WAIT);
+    d.tick();
+    expect(d.lost).toEqual({ n: 1, had: 7, miss: 2, s: 1, m: 1, e: 1, late: 0 }); // 11 (el marker) no se sabe que falta
+    d.push(kf[4]!); // seq 6 llega tarde
+    d.push(kf[4]!); // y duplicado: cuenta una vez
+    d.push(kf[9]!); // 11 no estaba anotado como faltante
+    expect(d.lost.late).toBe(1);
+  });
+
   test("memory is capped: with too many frames pending it stops waiting even before waitMs", () => {
     const { d, losses } = setup();
     d.push(pkt({ seq: 1, ts: 0, marker: true, payload: IDR }));

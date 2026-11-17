@@ -171,6 +171,14 @@ export class H264Depacketizer {
   concealed = 0;
   /** Cuadros que se completaron gracias a un reenvío. */
   recovered = 0;
+  /**
+   * Cuadros tirados por faltarles paquetes (para diagnóstico): cuántos, cuántos paquetes tenían y cuántos les
+   * faltaban, en cuántos faltaba el principio / algo del medio / el final, y cuántos de esos números de secuencia
+   * llegaron DESPUÉS de tirarlos (llegada tarde o desorden, no pérdida).
+   */
+  readonly lost = { n: 0, had: 0, miss: 0, s: 0, m: 0, e: 0, late: 0 };
+  /** Números que faltaban en los cuadros tirados, para contar los que llegan tarde (con tope). */
+  private lostSeqs = new Set<number>();
 
   /**
    * `waitMs`: cuánto puede esperar un cuadro incompleto a que lleguen sus reenvíos aunque ya haya cuadros
@@ -184,7 +192,10 @@ export class H264Depacketizer {
 
   /** Mete un paquete (`recovered`: llegó por reenvío); devuelve las access units que quedaron completas, en orden. */
   push(pkt: RtpPacket, recovered = false): Uint8Array[] {
-    if (this.lastEndSeq !== null && seqDiff(pkt.sequence, this.lastEndSeq) <= 0) return []; // vieja o duplicada
+    if (this.lastEndSeq !== null && seqDiff(pkt.sequence, this.lastEndSeq) <= 0) {
+      if (this.lostSeqs.delete(pkt.sequence)) this.lost.late++;
+      return []; // vieja o duplicada
+    }
     let frame = this.pending.find((f) => f.timestamp === pkt.timestamp);
     if (!frame) {
       frame = { timestamp: pkt.timestamp, packets: new Map(), markerSeq: null, firstSeq: pkt.sequence, createdAt: this.now(), recovered: false };
@@ -250,6 +261,7 @@ export class H264Depacketizer {
       const waited = this.now() - head.createdAt >= this.waitMs || this.pending.length > MAX_PENDING_FRAMES;
       if ((later || this.pending.length > 3) && waited) {
         this.pending.shift();
+        this.noteLost(head);
         const lastSeq = Math.max(...[...head.packets.keys()].map((s) => seqDiff(s, head.firstSeq))) + head.firstSeq;
         this.lastEndSeq = (head.markerSeq ?? lastSeq) & 0xffff;
         this.lose();
@@ -261,6 +273,30 @@ export class H264Depacketizer {
       break;
     }
     return out;
+  }
+
+  private noteLost(f: Pending): void {
+    const start = this.lastEndSeq === null ? f.firstSeq : (this.lastEndSeq + 1) & 0xffff;
+    const last = Math.max(...[...f.packets.keys()].map((s) => seqDiff(s, start)));
+    const span = Math.min((f.markerSeq === null ? last : seqDiff(f.markerSeq, start)) + 1, 4096);
+    const where = { s: false, m: false, e: f.markerSeq === null };
+    let miss = 0;
+    if (this.lostSeqs.size > 4096) this.lostSeqs.clear();
+    for (let i = 0; i < span; i++) {
+      const seq = (start + i) & 0xffff;
+      if (f.packets.has(seq)) continue;
+      miss++;
+      this.lostSeqs.add(seq);
+      if (i === 0) where.s = true;
+      else if (i === span - 1) where.e = true;
+      else where.m = true;
+    }
+    this.lost.n++;
+    this.lost.had += f.packets.size;
+    this.lost.miss += miss;
+    if (where.s) this.lost.s++;
+    if (where.m) this.lost.m++;
+    if (where.e) this.lost.e++;
   }
 
   private lose(): void {
