@@ -148,7 +148,7 @@ export function streamerSsrcs(d: any, streamerId: string, meId: string): { audio
 export function createViewerConnection(lib: ViewerLib, p: ViewerParams, events: ViewerEvents): ViewerConnection {
   const { PeerConnection, Audio, Video, RtcpReceivingSession } = lib.nodeDataChannel;
   const stats = { packets: 0, frames: 0, dropped: 0, daveFailures: 0 };
-  const diag = { ops: new Set<number>(), op12: 0, rtpVideo: 0, rtpOther: 0, rtpOtherSsrc: new Set<number>(), passthroughDrop: 0, notReadyDrop: 0, encrypted: 0, clear: 0, lastPt: -1, pli: 0, pliOk: 0, pliOwn: 0, wants: 0, nackPkts: 0, nackSent: 0, recovered: 0, late: 0 };
+  const diag = { ops: new Set<number>(), op12: 0, rtpVideo: 0, rtpOther: 0, rtpOtherSsrc: new Set<number>(), passthroughDrop: 0, notReadyDrop: 0, encrypted: 0, clear: 0, lastPt: -1, pli: 0, pliOk: 0, pliOwn: 0, wants: 0, nackPkts: 0, nackSent: 0, recovered: 0, stray: 0, late: 0 };
   let ownSsrc = 0;
   /** Lo que llega por RTP del video que miramos (histograma de NAL, tamaños, saltos) y payload types vistos. */
   const rx = new RtpH264Stats();
@@ -172,12 +172,24 @@ export function createViewerConnection(lib: ViewerLib, p: ViewerParams, events: 
     deliver(depack.tick());
   }, NACK_TICK_MS);
   (nackTimer as { unref?: () => void }).unref?.();
+  /**
+   * Si el SFU no atiende el NACK (muchos pedidos y casi ninguna respuesta en la ventana creíble), la espera solo
+   * congela la imagen: se apaga sola y el visor vuelve a lo de antes (tirar el cuadro y pedir keyframe, sin NACK).
+   */
+  let nackOff = false;
   function sendNacks(): void {
-    const seqs = nack.due();
-    if (!seqs.length || !ownSsrc || !ssrcs.video) return;
+    if (nackOff) return;
+    if (nack.useless) {
+      nackOff = true;
+      depack.waitMs = 0;
+      return;
+    }
     try {
-      // Con el track cerrado libdatachannel aborta el proceso (ver keyframe()).
-      if (videoTrack?.isOpen() && videoTrack.sendMessageBinary(nackPacket(ownSsrc, ssrcs.video, seqs))) {
+      // Antes de due(), que anota el intento: sin SSRC o con el track cerrado no se gasta ninguno. Con el track
+      // cerrado libdatachannel aborta el proceso (ver keyframe()).
+      if (!ownSsrc || !ssrcs.video || !videoTrack?.isOpen()) return;
+      const seqs = nack.due();
+      if (seqs.length && videoTrack.sendMessageBinary(nackPacket(ownSsrc, ssrcs.video, seqs))) {
         diag.nackPkts++;
         diag.nackSent += seqs.length;
       }
@@ -260,9 +272,11 @@ export function createViewerConnection(lib: ViewerLib, p: ViewerParams, events: 
       return;
     }
     diag.rtpVideo++;
-    // El tracker sabe si este número faltaba: llegó después de pedirlo (recuperado por el NACK) o desordenado antes.
+    // El tracker sabe si este número faltaba: llegó como respuesta creíble al NACK, demasiado pronto después de
+    // pedirlo (el original demorado) o desordenado antes de pedirlo.
     const filled = nack.received(pkt.sequence);
     if (filled === "resent") diag.recovered++;
+    else if (filled === "stray") diag.stray++;
     else if (filled === "late") diag.late++;
     else rx.observe(pkt); // los que tapan un hueco no cuentan como saltos de secuencia en rx/win
     deliver(depack.push(pkt, filled === "resent"));
@@ -420,13 +434,19 @@ export function createViewerConnection(lib: ViewerLib, p: ViewerParams, events: 
         encrypted: diag.encrypted,
         daveFail: stats.daveFailures,
         drop: `${diag.notReadyDrop}/${diag.passthroughDrop}/${stats.dropped}`,
-        // Si Discord atiende el NACK: nackPkts paquetes NACK, nackSent números pedidos, recovered los que llegaron
-        // DESPUÉS de pedirlos (RTX ya desenvuelto o reenvío), late los que llegaron desordenados antes de pedirlos,
-        // saved cuadros completados gracias a un recuperado. recovered = 0 con nackSent > 0 → no lo atiende.
+        // Si Discord atiende el NACK: nackPkts paquetes NACK, nackSent números pedidos (con reintentos), nackAsked
+        // números distintos pedidos; recovered los que llegaron en la ventana creíble de reenvío (RESEND_MIN_MS o más
+        // después del 1.er pedido) y rspMs su demora mín/mediana/máx desde ese pedido; stray los que llegaron antes
+        // de esa ventana (originales demorados); late los desordenados antes de pedirlos; saved cuadros completados
+        // gracias a un recuperado; nackOff = se apagaron la espera y el NACK porque el SFU no responde.
         nackPkts: diag.nackPkts,
         nackSent: diag.nackSent,
+        nackAsked: nack.asked,
         recovered: diag.recovered,
+        rspMs: nack.delaySummary(),
+        stray: diag.stray,
         late: diag.late,
+        nackOff,
         saved: depack.recovered,
         // Cuadros tirados: n, paquetes que tenían / que faltaban, en cuántos faltaba principio/medio/final y cuántos
         // de los que faltaban llegaron después de tirarlos.
