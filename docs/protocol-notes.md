@@ -258,7 +258,10 @@ READY, Opus PT 120, +960 de timestamp cada 20 ms); (2) el orden nuevo (`createSt
 ops (0, 12 vacío, 1, 5 `speaking: 2` con el SSRC de audio, 12 con el video), y la transmisión de las 21:02 arrancó `playStream`
 antes de que el stream estuviera listo (como sin audio) y cortó igual. El audio usa la conexión del stream (`new AudioStream(conn)`),
 no la principal, y pasa por DAVE (`encryptOpus`) como el video. Lo único distinto que ve Discord son los paquetes Opus. Para la
-próxima prueba, `src/golive/stats.ts` anota cada 5 s `golive.stats` (ver `docs/PRUEBAS-GON.md`, 6b).
+próxima prueba, `src/golive/stats.ts` anota cada 5 s `golive.stats` (ver `docs/PRUEBAS-GON.md`, 6b), y `ZCORD_GOLIVE_AUDIO=silence`
+manda silencio (ffmpeg `anullsrc` a ritmo real por el fd 3, sin pw-record ni el enlazador) para separar "mandar audio" de "lo que se
+captura". El diagnóstico nunca tira (si algo falla se apaga solo: `state: "off"`), saca el op con una expresión anclada sobre el
+principio del mensaje sin parsearlo (el identify lleva el token) y sigue en los cierres reanudables del WS.
 
 **Protocolo** (`src/golive/shim.ts`, `golive.ts`): el `Streamer` de `@dank074/discord-video-stream` 7.0.0 sobre NUESTRO gateway;
 solo pasan los ops 18 `STREAM_CREATE {type, guild_id, channel_id, preferred_region:null}`, 22 `STREAM_SET_PAUSED {stream_key,
