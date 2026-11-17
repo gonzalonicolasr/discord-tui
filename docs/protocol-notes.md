@@ -249,6 +249,17 @@ ffmpeg ≥7 no deja que una entrada se adelante más de 100 ms a otra, y wf-reco
 (medido): con audio se usa `-D`. El primer paquete de Opus trae pts negativo y NUT lo rechaza: `-bsf:a setts=ts=TS-STARTPTS`. Si
 pw-record se muere después del período de prueba, se corta la transmisión (la librería sincroniza el video contra el audio y se congelaría).
 
+**El corte a los 30 s con audio (4006, 2026-11-16), sin resolver:** en el log real, las 6 transmisiones con audio cierran a 30,15–30,18 s
+de `golive.live` (el WS del stream listo), aunque `playStream` arrancó entre 0,26 s antes y 0,75 s después: el reloj de 30 s va con la
+sesión del stream, no con el primer paquete. Descartado sin Discord: (1) que el video espere al audio: `playStream` real con conexión
+falsa y fuentes sintéticas (lavfi + tono por el fd 3, también con el audio 2 s atrasado o en ráfaga) saca 30 cuadros/s y 50 paquetes
+de audio/s parejos durante 40 s; con el servidor de stream falso y WebRTC real llegan ~580 RTP/s de video y 50/s de audio (SSRC del
+READY, Opus PT 120, +960 de timestamp cada 20 ms); (2) el orden nuevo (`createStream` temprano): con o sin audio se mandan los mismos
+ops (0, 12 vacío, 1, 5 `speaking: 2` con el SSRC de audio, 12 con el video), y la transmisión de las 21:02 arrancó `playStream`
+antes de que el stream estuviera listo (como sin audio) y cortó igual. El audio usa la conexión del stream (`new AudioStream(conn)`),
+no la principal, y pasa por DAVE (`encryptOpus`) como el video. Lo único distinto que ve Discord son los paquetes Opus. Para la
+próxima prueba, `src/golive/stats.ts` anota cada 5 s `golive.stats` (ver `docs/PRUEBAS-GON.md`, 6b).
+
 **Protocolo** (`src/golive/shim.ts`, `golive.ts`): el `Streamer` de `@dank074/discord-video-stream` 7.0.0 sobre NUESTRO gateway;
 solo pasan los ops 18 `STREAM_CREATE {type, guild_id, channel_id, preferred_region:null}`, 22 `STREAM_SET_PAUSED {stream_key,
 paused:false}` y 19 `STREAM_DELETE {stream_key}`; el op 4 queda bloqueado (la voz es de `@discordjs/voice`). Se le inyecta un

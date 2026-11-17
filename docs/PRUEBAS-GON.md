@@ -92,6 +92,22 @@ terminar en ban (ver `docs/protocol-notes.md`, "Transmitir pantalla").
       tampoco (no quedan enlaces de audio). Y después de `q`, tampoco.
 - [ ] `bun run leak-check` → `OK`.
 
+### 6b. Audio de la PC: ¿por qué Discord corta a los 30 s? (`ZCORD_GOLIVE_AUDIO=1`)
+
+Con el audio de la PC, Discord cerraba la transmisión a los 30 s (`golive.ws-closed` 4006). Desde el 2026-11-16, mientras transmitís,
+el log anota cada 5 s una línea `golive.stats` (solo cantidades, estados y números de op; nada de la cuenta). Dos pruebas seguidas,
+en el mismo canal, con algo sonando en la PC (si hay un amigo mirando, mejor, pero no hace falta):
+
+- [ ] **A, sin audio:** `bun run dev` → transmití ~60 s → `🔴 EN VIVO · detener`.
+- [ ] **B, con audio:** salí con `q`, `ZCORD_GOLIVE_AUDIO=1 bun run dev` → transmití y esperá 45 s (si corta, va a ser a los ~30 s).
+- [ ] Pegame la salida de `grep '"golive\.' ~/.local/state/discord-tui/discord-tui.log | tail -40`.
+
+Qué miro yo en B (las 2 últimas `golive.stats` antes de `golive.ws-closed`, y la última, con `"state":"ws-4006"`):
+`v` sube ~150 por línea y `waiting` es `"no"` → el video salía bien; `vd`/`ad` mayores a 0 o `rtc` distinto de `"connected"` → WebRTC
+no conectó y a Discord no le llegaba nada; `waiting: "video"` → la librería frenaba el video esperando al audio; `in` de las
+últimas líneas → qué op mandó Discord justo antes de cortar; `msg` de `golive.ws-closed` → el motivo que dio Discord; `dave`/`dave_v`
+y `out` → comparar con A.
+
 ## 7. Ver la transmisión de otro [2ª]
 
 Necesita a un amigo que transmita pantalla (Go Live) desde el cliente oficial en un canal de voz donde estés vos. Usa tu
