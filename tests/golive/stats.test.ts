@@ -268,3 +268,36 @@ describe("go live stats wrappers", () => {
     expect(() => conn.sendVideoFrame("throw", 33)).toThrow(RangeError);
   });
 });
+
+describe("go live stats count what the library really sent", () => {
+  test("a send that throws is not counted as sent", () => {
+    const lines: any[] = [];
+    const conn: any = {
+      ready: true,
+      sendVideoFrame() {
+        throw new RangeError("boom");
+      },
+      sendAudioFrame() {},
+    };
+    const stats = watchStream(conn, { log: { info: (_e, f) => void lines.push(f) }, intervalMs: 0 });
+    expect(() => conn.sendVideoFrame(Buffer.alloc(1), 33)).toThrow(RangeError);
+    stats.report();
+    expect(JSON.parse(lines.at(-1).msg)).toMatchObject({ v: 0, vd: 0, v_ms: 0 });
+  });
+
+  test("connected but without a packetizer yet (the library drops it): counted as dropped", () => {
+    const lines: any[] = [];
+    const conn: any = {
+      ready: true,
+      _videoPacketizer: undefined,
+      _audioPacketizer: { rtpConfig: {} },
+      sendVideoFrame() {},
+      sendAudioFrame() {},
+    };
+    const stats = watchStream(conn, { log: { info: (_e, f) => void lines.push(f) }, intervalMs: 0 });
+    conn.sendVideoFrame(Buffer.alloc(1), 33);
+    conn.sendAudioFrame(Buffer.alloc(1), 20);
+    stats.report();
+    expect(JSON.parse(lines.at(-1).msg)).toMatchObject({ v: 0, vd: 1, a: 1, ad: 0 });
+  });
+});

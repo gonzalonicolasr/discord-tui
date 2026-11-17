@@ -11,7 +11,8 @@
  * Campos del `msg` (JSON):
  *   s            segundos desde que el stream quedó listo
  *   v / a        cuadros de video / paquetes de audio entregados a WebRTC
- *   vd / ad      los que la librería tiró sin mandar porque WebRTC no estaba conectado (`ready` false)
+ *   vd / ad      los que la librería tiró sin mandar: WebRTC no conectado (`ready` false) o sin packetizer todavía
+ *                (si el envío tira, no se cuenta en ninguno)
  *   v_ms / a_ms  reloj de medios: suma de las duraciones de lo enviado (lo mismo que avanza el timestamp RTP;
  *                es el último pts relativo al primero)
  *   v_idle_ms / a_idle_ms  ms desde el último cuadro / paquete (null si todavía no hubo)
@@ -99,19 +100,26 @@ export function watchStream(
   const wrap = (name: "sendVideoFrame" | "sendAudioFrame", track: Track): void => {
     const original = conn?.[name];
     if (typeof original !== "function") return;
+    const packetizer = name === "sendVideoFrame" ? "_videoPacketizer" : "_audioPacketizer";
     conn[name] = function (this: unknown, ...args: unknown[]) {
-      const frametime = Number(args[1]);
-      // Contar nunca puede romper el envío de la librería.
+      // Antes de llamar: la librería solo manda con el PeerConnection conectado y el packetizer armado; si no, lo
+      // tira sin avisar. Contar nunca puede romper el envío.
+      let drops = false;
       safe(() => {
-        // La librería manda solo con el PeerConnection conectado; si no, lo tira sin avisar.
-        if (conn.ready === false) track.dropped++;
+        drops = conn.ready === false || (packetizer in conn && !conn[packetizer]);
+      });
+      const result = original.apply(this, args);
+      // Solo cuenta si el original no tiró.
+      safe(() => {
+        if (drops) track.dropped++;
         else {
+          const frametime = Number(args[1]);
           track.sent++;
           track.mediaMs += Number.isFinite(frametime) ? frametime : 0;
           track.lastAt = now();
         }
       });
-      return original.apply(this, args);
+      return result;
     };
   };
 
