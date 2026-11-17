@@ -13,7 +13,15 @@
  * VoiceConnection "dormido" con el session_id de NUESTRA voz (el del VOICE_STATE_UPDATE propio) que nunca recibe
  * setTokens(), así que nunca abre el WS de voz principal. Nunca se llama `joinVoice()` (abriría una segunda
  * conexión de voz y mandaría un op 4 con self_deaf:true). La librería abre solo el WS del stream.
+ *
+ * Además, a cada StreamConnection que arma `createStream()`:
+ *   - su oferta declara el SSRC de video que asignó Discord (op 2) con `a=ssrc:`. Con dos m-lines (audio + video) y
+ *     sin `a=ssrc` local, libdatachannel no sabe a qué track va el RTCP que manda Discord (PLI, NACK, reports) y lo
+ *     tira: el RtcpNackResponder de la librería nunca veía un NACK (medido en loopback: 0 de 4 contra 4 de 4).
+ *   - se anota lo negociado en el op 4 para golive.stats (stats.ts, `recordNegotiated`).
  */
+import { recordNegotiated } from "./stats";
+
 
 /** Lo que usamos de la librería; se carga a pedido (importarla arrastra node-av y sharp). */
 export interface GoLiveLib {
@@ -86,6 +94,17 @@ export function createGoLiveShim(deps: { gateway: ShimGateway; meId: string; lib
   };
 
   const streamer = new deps.lib.Streamer(fakeClient);
+  const createStream = streamer.createStream.bind(streamer);
+  streamer.createStream = (): Promise<unknown> => {
+    const created = createStream();
+    // La StreamConnection se arma de forma sincrónica adentro de createStream(); el WS abre recién con los STREAM_*.
+    const media = streamer.voiceConnection?.streamConnection;
+    if (media) {
+      declareVideoSsrc(media);
+      recordNegotiated(media);
+    }
+    return created;
+  };
 
   return {
     streamer,
@@ -107,5 +126,29 @@ export function createGoLiveShim(deps: { gateway: ShimGateway; meId: string; lib
       off();
       rawListeners.clear();
     },
+  };
+}
+
+/**
+ * Antes de que la librería arme la PeerConnection (`initWebRtc`, después del op 2 que trae los SSRC), agrega el SSRC
+ * de video a su definición de video: sale como `a=ssrc:` en la oferta. Una sola vez (la definición se reusa si la
+ * librería rearma la PeerConnection). Si la forma de la librería no es la esperada, no hace nada.
+ */
+export function declareVideoSsrc(media: any): void {
+  const wrapper = media?._webRtcWrapper;
+  const initWebRtc = wrapper?.initWebRtc;
+  if (typeof initWebRtc !== "function") return;
+  let declared = false;
+  wrapper.initWebRtc = function (this: unknown, ...args: unknown[]) {
+    try {
+      const ssrc = media.webRtcParams?.videoSsrc;
+      if (!declared && typeof ssrc === "number" && ssrc > 0 && typeof wrapper._videoDef?.addSSRC === "function") {
+        wrapper._videoDef.addSSRC(ssrc, "zcord", "stream", "video");
+        declared = true;
+      }
+    } catch {
+      // sin a=ssrc: igual que antes
+    }
+    return initWebRtc.apply(this, args);
   };
 }

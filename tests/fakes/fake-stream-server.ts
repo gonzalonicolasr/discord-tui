@@ -19,6 +19,8 @@ export interface FakeStreamServer {
   closeWith(code: number): void;
   /** Paquetes RTP de video que el relay le reenvió a los que miran. */
   relayed(): number;
+  /** Manda un paquete (RTCP: PLI, NACK, RR…) al que transmite por su track de video. false si todavía no hay track. */
+  sendToStreamer(buf: Uint8Array): boolean;
   stop(): void;
 }
 
@@ -28,7 +30,9 @@ export interface FakeStreamServer {
  * les avisa con un op 12 VIDEO {user_id, audio_ssrc, video_ssrc, streams} como hace Discord. `dave` = versión DAVE
  * del op 4 (1 por defecto; 0 = sin E2EE).
  */
-export function startFakeStreamServer(opts: { relay?: boolean; dave?: number; streamerId?: string } = {}): FakeStreamServer {
+export function startFakeStreamServer(
+  opts: { relay?: boolean; dave?: number; streamerId?: string; /** Cada paquete de video que llega del que transmite (con la hora). */ onStreamerPacket?: (msg: Buffer, at: number) => void } = {},
+): FakeStreamServer {
   const dir = mkdtempSync(join(tmpdir(), "golive-tls-"));
   Bun.spawnSync(
     ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", join(dir, "k.pem"), "-out", join(dir, "c.pem"), "-days", "1", "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1"],
@@ -119,6 +123,7 @@ export function startFakeStreamServer(opts: { relay?: boolean; dave?: number; st
               me.videoTrack = t;
               t.onMessage((msg: Buffer) => {
                 if (!me.streaming) return;
+                opts.onStreamerPacket?.(msg, performance.now());
                 for (const c of conns.values()) {
                   if (c === me || !c.videoTrack?.isOpen()) continue;
                   try {
@@ -149,6 +154,11 @@ export function startFakeStreamServer(opts: { relay?: boolean; dave?: number; st
     endpoint: `127.0.0.1:${server.port}`,
     connections: () => connections,
     relayed: () => relayed,
+    sendToStreamer(buf) {
+      const streamer = [...conns.values()].find((c) => c.streaming);
+      if (!streamer?.videoTrack?.isOpen()) return false;
+      return streamer.videoTrack.sendMessageBinary(Buffer.from(buf));
+    },
     ops,
     closeWith(code) {
       open?.close(code, "test");
