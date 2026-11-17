@@ -7,8 +7,9 @@
  * se calcula sobre ese formato (davey normaliza a 4 bytes al cifrar, verificado en scripts/spike-watch/dave-video.ts),
  * así que hay que reconstruir los mismos bytes para descifrar.
  *
- * Pérdidas: no mandamos NACK (libdatachannel no trae un NACK requester en esta versión). Si falta un paquete, el
- * cuadro se descarta, se avisa (`onLoss`, para pedir un keyframe con PLI) y se espera el próximo cuadro con IDR.
+ * Pérdidas: el visor pide los paquetes que faltan (NACK, ver nack.ts) y le da al cuadro incompleto `waitMs` para
+ * completarse con el reenvío. Si igual no se completa, el cuadro se descarta, se avisa (`onLoss`, para pedir un
+ * keyframe con PLI) y se espera el próximo cuadro con IDR.
  * Los clientes de Discord casi no mandan keyframes solos: mientras se espera se repite el PLI y, si igual no llega
  * (`KEYFRAME_PATIENCE` cuadros, ~1,5 s), se sigue con los cuadros P. El decodificador tapa la pérdida y la imagen
  * se va arreglando sola, en vez de quedar congelada para siempre.
@@ -18,6 +19,8 @@
 export const KEYFRAME_PATIENCE = 45;
 /** Cada cuántos cuadros tirados se vuelve a pedir el keyframe. */
 export const KEYFRAME_RETRY = 15;
+/** Cuadros pendientes como mucho mientras se espera un reenvío (tope de memoria y de demora). */
+export const MAX_PENDING_FRAMES = 64;
 
 export interface RtpPacket {
   marker: boolean;
@@ -143,6 +146,10 @@ interface Pending {
   packets: Map<number, RtpPacket>;
   markerSeq: number | null;
   firstSeq: number;
+  /** Cuándo llegó su primer paquete (para el tiempo de espera del reenvío). */
+  createdAt: number;
+  /** Algún paquete suyo llegó por reenvío (NACK). */
+  recovered: boolean;
 }
 
 /**
@@ -162,21 +169,37 @@ export class H264Depacketizer {
   /** Keyframes recibidos y veces que se siguió sin keyframe (para diagnóstico). */
   keyframes = 0;
   concealed = 0;
+  /** Cuadros que se completaron gracias a un reenvío. */
+  recovered = 0;
 
-  constructor(private readonly onLoss: () => void = () => {}) {}
+  /**
+   * `waitMs`: cuánto puede esperar un cuadro incompleto a que lleguen sus reenvíos aunque ya haya cuadros
+   * posteriores (0 = se tira apenas hay uno posterior completo, como sin NACK).
+   */
+  constructor(
+    private readonly onLoss: () => void = () => {},
+    private readonly waitMs = 0,
+    private readonly now: () => number = () => performance.now(),
+  ) {}
 
-  /** Mete un paquete; devuelve las access units que quedaron completas, en orden. */
-  push(pkt: RtpPacket): Uint8Array[] {
+  /** Mete un paquete (`recovered`: llegó por reenvío); devuelve las access units que quedaron completas, en orden. */
+  push(pkt: RtpPacket, recovered = false): Uint8Array[] {
     if (this.lastEndSeq !== null && seqDiff(pkt.sequence, this.lastEndSeq) <= 0) return []; // vieja o duplicada
     let frame = this.pending.find((f) => f.timestamp === pkt.timestamp);
     if (!frame) {
-      frame = { timestamp: pkt.timestamp, packets: new Map(), markerSeq: null, firstSeq: pkt.sequence };
+      frame = { timestamp: pkt.timestamp, packets: new Map(), markerSeq: null, firstSeq: pkt.sequence, createdAt: this.now(), recovered: false };
       this.pending.push(frame);
       this.pending.sort((a, b) => seqDiff(a.firstSeq, b.firstSeq));
     }
     frame.packets.set(pkt.sequence, pkt);
+    if (recovered) frame.recovered = true;
     if (seqDiff(pkt.sequence, frame.firstSeq) < 0) frame.firstSeq = pkt.sequence;
     if (pkt.marker) frame.markerSeq = pkt.sequence;
+    return this.drain();
+  }
+
+  /** Revisa los tiempos de espera sin un paquete nuevo (llamar seguido): devuelve lo que quedó listo. */
+  tick(): Uint8Array[] {
     return this.drain();
   }
 
@@ -203,6 +226,7 @@ export class H264Depacketizer {
           this.lose();
           continue;
         }
+        if (head.recovered) this.recovered++;
         const idr = hasIdr(au);
         if (idr) this.keyframes++;
         if (this.needKeyframe && !idr) {
@@ -221,8 +245,10 @@ export class H264Depacketizer {
         continue;
       }
       // Un cuadro posterior ya está completo (o se juntaron muchos): el primero no va a llegar entero.
+      // Con NACK se le da `waitMs` desde su primer paquete para que lleguen los reenvíos (con tope de cuadros).
       const later = this.pending.slice(1).some((f) => f.markerSeq !== null);
-      if (later || this.pending.length > 3) {
+      const waited = this.now() - head.createdAt >= this.waitMs || this.pending.length > MAX_PENDING_FRAMES;
+      if ((later || this.pending.length > 3) && waited) {
         this.pending.shift();
         const lastSeq = Math.max(...[...head.packets.keys()].map((s) => seqDiff(s, head.firstSeq))) + head.firstSeq;
         this.lastEndSeq = (head.markerSeq ?? lastSeq) & 0xffff;

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { H264Depacketizer, KEYFRAME_PATIENCE, KEYFRAME_RETRY, RtpH264Stats, assembleAccessUnit, hasIdr, parseRtp, splitAnnexB, type RtpPacket } from "../../src/watch/h264";
+import { H264Depacketizer, KEYFRAME_PATIENCE, KEYFRAME_RETRY, MAX_PENDING_FRAMES, RtpH264Stats, assembleAccessUnit, hasIdr, parseRtp, splitAnnexB, type RtpPacket } from "../../src/watch/h264";
 
 function rtp(opts: { seq: number; ts: number; marker?: boolean; pt?: number; ssrc?: number; payload: Uint8Array; ext?: boolean; pad?: number }): Uint8Array {
   const ext = opts.ext ? new Uint8Array([0xbe, 0xde, 0, 1, 0x10, 0xaa, 0, 0]) : new Uint8Array(0);
@@ -107,6 +107,89 @@ test("sequence numbers wrap around 65535", () => {
   expect(d.push(pkt({ seq: 65535, ts: 0, marker: true, payload: IDR }))).toHaveLength(1);
   expect(d.push(pkt({ seq: 0, ts: 3000, marker: true, payload: P }))).toHaveLength(1);
   expect(d.push(pkt({ seq: 65535, ts: 0, marker: true, payload: IDR }))).toEqual([]); // duplicado viejo
+});
+
+describe("depacketizer waiting for retransmissions (waitMs)", () => {
+  const WAIT = 400;
+  /** Un keyframe en FU-A de `n` paquetes desde `seq` (marker en el último). */
+  const keyframe = (seq: number, ts: number, n: number): RtpPacket[] =>
+    Array.from({ length: n }, (_, i) => {
+      const fu = new Uint8Array([0x7c, (i === 0 ? 0x80 : 0) | (i === n - 1 ? 0x40 : 0) | 5, i & 0xff, 7, 7, 7]);
+      return pkt({ seq: seq + i, ts, marker: i === n - 1, payload: fu });
+    });
+  const setup = () => {
+    let t = 0;
+    let losses = 0;
+    const d = new H264Depacketizer(() => losses++, WAIT, () => t);
+    return { d, advance: (ms: number) => void (t += ms), losses: () => losses };
+  };
+
+  test("a keyframe missing packets waits while later frames arrive, then completes with the late resends (reordered, duplicated)", () => {
+    const { d, advance, losses } = setup();
+    const kf = keyframe(100, 3000, 150);
+    const lost = new Set([110, 111, 180, 249]); // incluye el último (el del marker)
+    let out: Uint8Array[] = [];
+    for (const p of kf) if (!lost.has(p.sequence)) out.push(...d.push(p));
+    for (let i = 0; i < 5; i++) {
+      advance(33);
+      out.push(...d.push(pkt({ seq: 250 + i, ts: 6000 + i * 3000, marker: true, payload: P })));
+    }
+    expect(out).toEqual([]); // nada sale antes del keyframe: los P esperan detrás
+    advance(100);
+    // los reenvíos llegan desordenados y uno duplicado
+    for (const seq of [249, 111, 180, 111, 110]) out.push(...d.push(kf[seq - 100]!, true));
+    expect(out).toHaveLength(6); // el keyframe + los 5 P, en orden
+    expect(hasIdr(out[0]!)).toBe(true);
+    expect([...out[1]!]).toEqual([...sc, ...P]);
+    expect(d.recovered).toBe(1);
+    expect(d.dropped).toBe(0);
+    expect(losses()).toBe(0);
+    expect(d.push(kf[10]!, true)).toEqual([]); // un reenvío que llega después: viejo, se ignora
+  });
+
+  test("if the resends never come it drops the frame after waitMs (on the next packet or tick) and asks for a keyframe, like without NACK", () => {
+    const { d, advance, losses } = setup();
+    d.push(pkt({ seq: 1, ts: 0, marker: true, payload: IDR }));
+    expect(d.push(pkt({ seq: 3, ts: 3000, marker: true, payload: P }))).toEqual([]); // seq 2 perdido
+    expect(d.push(pkt({ seq: 4, ts: 6000, marker: true, payload: P }))).toEqual([]);
+    advance(WAIT - 1);
+    expect(d.tick()).toEqual([]);
+    expect(d.dropped).toBe(0); // todavía espera
+    advance(1);
+    d.tick();
+    expect(d.dropped).toBe(1);
+    expect(losses()).toBe(1);
+    expect(d.push(pkt({ seq: 2, ts: 3000, payload: P }), true)).toEqual([]); // reenvío tardío: ya descartado
+    expect(d.push(pkt({ seq: 5, ts: 9000, marker: true, payload: IDR }))).toHaveLength(1);
+    expect(d.recovered).toBe(0);
+  });
+
+  test("a resend that rescues an ordinary frame counts as recovered; reordering without loss is not", () => {
+    const { d, advance } = setup();
+    d.push(pkt({ seq: 1, ts: 0, marker: true, payload: IDR }));
+    expect(d.push(pkt({ seq: 3, ts: 6000, marker: true, payload: P }))).toEqual([]);
+    advance(50);
+    expect(d.push(pkt({ seq: 2, ts: 3000, marker: true, payload: P }), true)).toHaveLength(2);
+    expect(d.push(pkt({ seq: 5, ts: 12000, marker: true, payload: P }))).toEqual([]);
+    expect(d.push(pkt({ seq: 4, ts: 9000, marker: true, payload: P }))).toHaveLength(2); // llegó tarde, sin NACK
+    expect(d.recovered).toBe(1);
+    expect(d.dropped).toBe(0);
+  });
+
+  test("memory is capped: with too many frames pending it stops waiting even before waitMs", () => {
+    const { d, losses } = setup();
+    d.push(pkt({ seq: 1, ts: 0, marker: true, payload: IDR }));
+    let droppedAt = -1;
+    // seq 2 nunca llega y el reloj no avanza
+    for (let i = 0; i < MAX_PENDING_FRAMES + 5; i++) {
+      d.push(pkt({ seq: 3 + i, ts: 3000 * (i + 2), marker: true, payload: P }));
+      if (d.dropped && droppedAt < 0) droppedAt = i;
+    }
+    expect(droppedAt).toBe(MAX_PENDING_FRAMES); // cuando se pasa del tope
+    expect(d.dropped).toBe(1);
+    expect(losses()).toBeGreaterThanOrEqual(1); // PLI al tirarlo (y los re-pedidos de siempre)
+    expect(d.push(pkt({ seq: 3 + MAX_PENDING_FRAMES + 5, ts: 999_000, marker: true, payload: IDR }))).toHaveLength(1);
+  });
 });
 
 describe("RtpH264Stats (numbers for watch.diag)", () => {
