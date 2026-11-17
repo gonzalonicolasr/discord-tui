@@ -18,6 +18,13 @@ function textProc(text: string): ProcLike {
 }
 
 function setup(opts: { tools?: string[]; monitors?: unknown[]; inVoice?: boolean; session?: boolean; pwDumpExit?: number; failWithAudio?: boolean; audioReady?: Promise<boolean> | boolean; desktopAudio?: boolean } = {}) {
+  /** Diagnóstico falso: con qué conexión arrancó y cómo terminó cada uno. */
+  const statsRuns: Array<{ conn: unknown; stops: string[] }> = [];
+  const stats = (conn: unknown) => {
+    const run = { conn, stops: [] as string[] };
+    statsRuns.push(run);
+    return { report() {}, stop: (why: string) => void run.stops.push(why) };
+  };
   const store = createStore(emptyState());
   store.dispatch({
     type: "gw",
@@ -41,7 +48,7 @@ function setup(opts: { tools?: string[]; monitors?: unknown[]; inVoice?: boolean
       return textProc(JSON.stringify(opts.monitors ?? [{ name: "DP-1", width: 1920, height: 1080, focused: false }, { name: "HDMI-A-1", width: 1920, height: 1080, focused: true }]));
     },
   };
-  const golive = createGoLive({ store, gateway: gw, loadLib: async () => fake.lib, env, startCapture: capture.start, pickEncoder: async () => "nvenc", createTimeoutMs: 200, desktopAudio: opts.desktopAudio ?? true });
+  const golive = createGoLive({ store, gateway: gw, loadLib: async () => fake.lib, env, startCapture: capture.start, pickEncoder: async () => "nvenc", createTimeoutMs: 200, desktopAudio: opts.desktopAudio ?? true, stats });
   if (opts.inVoice !== false) {
     if (opts.session !== false) gw.dispatch("VOICE_STATE_UPDATE", { guild_id: GUILD, user_id: ME, channel_id: VOICE_A, session_id: "voice-session-1" });
     store.dispatch({ type: "voice/joining", guildId: GUILD, channelId: VOICE_A });
@@ -49,7 +56,7 @@ function setup(opts: { tools?: string[]; monitors?: unknown[]; inVoice?: boolean
   }
   const stream = () => store.getState().voice.stream;
   const notices = () => Object.values(store.getState().notices).map((n: any) => n.text);
-  return { store, gw, fake, capture, golive, stream, notices, spawned };
+  return { store, gw, fake, capture, golive, stream, notices, spawned, statsRuns };
 }
 
 async function goLive(s: ReturnType<typeof setup>, monitor?: string) {
@@ -303,6 +310,36 @@ describe("stop", () => {
     s.store.dispatch({ type: "voice/status", status: "reconnecting" });
     expect(s.stream().status).toBe("live");
     expect(s.capture.stops()).toBe(0);
+  });
+
+  test("the stream diagnostics start once the stream is ready and end with the reason (WS close code first)", async () => {
+    const s = setup();
+    await s.golive.start("DP-1");
+    expect(s.statsRuns).toEqual([]);
+    await s.fake.ready();
+    expect(s.statsRuns).toHaveLength(1);
+    expect(s.statsRuns[0]!.conn).toHaveProperty("mediaConnection");
+    s.fake.closeWs(4006);
+    await Bun.sleep(1);
+    expect(s.statsRuns[0]!.stops[0]).toBe("ws-4006");
+  });
+
+  test("the stream diagnostics also end when the stream is stopped by hand or by an error", async () => {
+    const s = setup();
+    await goLive(s, "DP-1");
+    await s.golive.stop();
+    expect(s.statsRuns[0]!.stops[0]).toBe("idle");
+    await goLive(s, "DP-1");
+    await s.capture.die();
+    expect(s.statsRuns[1]!.stops[0]).toBe("error");
+  });
+
+  test("with the PC audio the diagnostics watch the one stream asked for early, not a second one", async () => {
+    const s = setup({ tools: ["wf-recorder", "grim", "hyprctl", "pw-record", "pw-link", "pw-dump"] });
+    await goLive(s, "DP-1");
+    expect(s.capture.started[0]).toMatchObject({ audio: true });
+    expect(s.stream()).toMatchObject({ status: "live", desktopAudio: true });
+    expect(s.statsRuns).toHaveLength(1);
   });
 
   test("STREAM_DELETE for someone else's stream is ignored", async () => {

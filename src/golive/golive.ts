@@ -20,6 +20,7 @@ import {
 import { probeDesktopAudio } from "./desktop-audio";
 import { GRIM_SLOW, STREAM_ERRORS, streamCloseMessage, streamDeleteMessage } from "./errors";
 import { createGoLiveShim, loadGoLiveLib, streamKeyFor, type GoLiveLib, type GoLiveShim } from "./shim";
+import { watchStream, type StreamStats } from "./stats";
 
 export interface GoLiveGateway {
   send(op: number, d: unknown): void;
@@ -52,6 +53,8 @@ interface Active {
   shim: GoLiveShim | null;
   capture: CaptureHandle | null;
   conn: unknown;
+  /** Diagnóstico al log cada ~5 s mientras el stream está listo (stats.ts). */
+  stats: StreamStats | null;
 }
 
 export function createGoLive(deps: {
@@ -68,6 +71,8 @@ export function createGoLive(deps: {
    * transmisiones). Sin esto la transmisión es solo video, como antes de que existiera el audio.
    */
   desktopAudio?: boolean;
+  /** Diagnóstico de la transmisión (inyectable para los tests). */
+  stats?: (conn: unknown) => StreamStats;
 }): GoLive {
   const { store, gateway } = deps;
   const env = deps.env ?? defaultCaptureEnv;
@@ -75,6 +80,7 @@ export function createGoLive(deps: {
   const pickEncoder = deps.pickEncoder ?? ((e: CaptureEnv) => pickEncoderDefault(e));
   const loadLib = deps.loadLib ?? loadGoLiveLib;
   const desktopAudio = deps.desktopAudio ?? process.env.ZCORD_GOLIVE_AUDIO === "1";
+  const startStats = deps.stats ?? ((conn: unknown) => watchStream(conn, { log }));
   let lib: GoLiveLib | null = null;
   let active: Active | null = null;
   let stopping: Promise<void> = Promise.resolve();
@@ -98,6 +104,8 @@ export function createGoLive(deps: {
     if (active !== a) return stopping;
     active = null;
     a.abort.abort();
+    a.stats?.stop(error ? "error" : "idle");
+    a.stats = null;
     a.shim?.destroy(); // op 19 si llegó a mandar el op 18
     a.shim = null;
     a.conn = null;
@@ -140,10 +148,12 @@ export function createGoLive(deps: {
               clearTimeout(timer);
               if (active !== a) return reject(new GoLiveError("cortado"));
               a.conn = conn;
+              a.stats = startStats(conn);
               const ws = conn?.mediaConnection?.ws;
-              ws?.addEventListener?.("close", (e: { code: number }) => {
+              ws?.addEventListener?.("close", (e: { code: number; reason?: string }) => {
                 const message = streamCloseMessage(e.code);
-                log.warn("golive.ws-closed", { close_code: e.code });
+                log.warn("golive.ws-closed", { close_code: e.code, msg: String(e.reason ?? "").slice(0, 80) });
+                if (active === a) a.stats?.stop(`ws-${e.code}`);
                 if (message && active === a) void finish(a, message);
               });
               setStream({ status: "live" });
@@ -177,6 +187,7 @@ export function createGoLive(deps: {
       shim: null,
       capture: null,
       conn: null,
+      stats: null,
     };
     active = a;
     setStream({ status: "starting", monitor: monitorArg ?? null, error: null, viewers: undefined, viewerIds: undefined, desktopAudio: undefined });
