@@ -99,7 +99,8 @@ export function watchStream(
   const wrap = (name: "sendVideoFrame" | "sendAudioFrame", track: Track): void => {
     const original = conn?.[name];
     if (typeof original !== "function") return;
-    conn[name] = function (frame: unknown, frametime: number) {
+    conn[name] = function (this: unknown, ...args: unknown[]) {
+      const frametime = Number(args[1]);
       // Contar nunca puede romper el envío de la librería.
       safe(() => {
         // La librería manda solo con el PeerConnection conectado; si no, lo tira sin avisar.
@@ -110,7 +111,7 @@ export function watchStream(
           track.lastAt = now();
         }
       });
-      return original.call(this, frame, frametime);
+      return original.apply(this, args);
     };
   };
 

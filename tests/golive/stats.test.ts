@@ -242,3 +242,29 @@ describe("go live stats never throw", () => {
     expect(calls).toBe(2);
   });
 });
+
+describe("go live stats wrappers", () => {
+  test("pass every argument through, keep this, the return value and the exception", () => {
+    const seen: unknown[][] = [];
+    const conn: any = {
+      ready: true,
+      sendVideoFrame(this: unknown, ...args: unknown[]) {
+        seen.push([this, ...args]);
+        if (args[0] === "throw") throw new RangeError("boom");
+        return 42;
+      },
+      sendAudioFrame(this: unknown, ...args: unknown[]) {
+        seen.push([this, ...args]);
+        return 7;
+      },
+    };
+    watchStream(conn, { log: { info() {} }, intervalMs: 0 });
+    const buf = Buffer.alloc(8);
+    expect(conn.sendVideoFrame(buf, 33, "extra")).toBe(42);
+    expect(seen[0]).toEqual([conn, buf, 33, "extra"]);
+    expect(seen[0]![1]).toBe(buf);
+    expect(conn.sendAudioFrame(buf, 20, 1, 2)).toBe(7);
+    expect(seen[1]).toEqual([conn, buf, 20, 1, 2]);
+    expect(() => conn.sendVideoFrame("throw", 33)).toThrow(RangeError);
+  });
+});
