@@ -1,4 +1,4 @@
-import { ImageRenderable, NativeImagePool, Renderable, type BoxRenderable } from "@opentui/core";
+import { ImageRenderable, NativeImagePool, Renderable, RGBA, type BoxRenderable, type OptimizedBuffer } from "@opentui/core";
 import { useRenderer } from "@opentui/solid";
 import { createSignal, onCleanup, Show, type JSX } from "solid-js";
 
@@ -106,9 +106,22 @@ export function StreamViewer(props: { store: Store; theme: Theme; voice: VoiceAc
     videoView = computeView();
     video.move(videoView);
   };
+  /**
+   * Las celdas debajo del video con el fondo por defecto de la terminal, como las deja el `<image>` nativo: la app
+   * Herdr dibuja las imágenes debajo del texto por debajo de los fondos de celda pintados, y con el fondo del tema
+   * encima el recuadro mostraba solo el fondo. Solo las partes que se ven: lo que tapa el video se pinta después.
+   */
+  const holeBg = RGBA.defaultBackground();
+  function paintHole(buffer: OptimizedBuffer): void {
+    if (!video || !videoView || !hasFrame()) return;
+    const { box, parts } = videoView;
+    for (const p of parts) buffer.fillRect(box.col + p.x, box.row + p.y, p.w, p.h, holeBg);
+  }
   function startOwnVideo(): KittyVideo {
     const v = new KittyVideo(renderer.nativeScene.driver);
     renderer.on("frame", onPresented); // después de cada cuadro: lo que tapa el video o dónde quedó la caja
+    if (process.env.ZCORD_KITTY_HOLE !== "0") image!.renderAfter = paintHole;
+    if (process.env.ZCORD_KITTY_ZLIB === "0") return v;
     if (zlibTerminals.has(renderer)) v.zlib = true;
     else
       void probeZlib(renderer.nativeScene.driver, renderer).then((ok) => {
