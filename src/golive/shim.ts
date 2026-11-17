@@ -71,7 +71,14 @@ export interface GoLiveShim {
   destroy(): void;
 }
 
-export function createGoLiveShim(deps: { gateway: ShimGateway; meId: string; lib: GoLiveLib; onCodec?: CodecListener }): GoLiveShim {
+export function createGoLiveShim(deps: {
+  gateway: ShimGateway;
+  meId: string;
+  lib: GoLiveLib;
+  onCodec?: CodecListener;
+  /** Declarar el SSRC de video en la oferta (`declareVideoSsrc`). Por defecto sí; `ZCORD_GOLIVE_SSRC=0` lo apaga. */
+  declareSsrc?: boolean;
+}): GoLiveShim {
   const rawListeners = new Set<(p: { t: string; d: unknown }) => void>();
   const off = deps.gateway.on("dispatch", (t, d) => {
     if (!t.startsWith("STREAM_")) return; // la librería no ve nada más del gateway
@@ -106,7 +113,7 @@ export function createGoLiveShim(deps: { gateway: ShimGateway; meId: string; lib
     // La StreamConnection se arma de forma sincrónica adentro de createStream(); el WS abre recién con los STREAM_*.
     const media = streamer.voiceConnection?.streamConnection;
     if (media) {
-      declareVideoSsrc(media);
+      if (deps.declareSsrc !== false) declareVideoSsrc(media);
       onlyH264(media);
       noResumeAfterStop(media);
       recordNegotiated(media, deps.onCodec);

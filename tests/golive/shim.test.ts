@@ -157,3 +157,30 @@ describe("the server picks another video codec (op 4 or op 14)", () => {
     ]);
   });
 });
+
+describe("declareSsrc: false (ZCORD_GOLIVE_SSRC=0)", () => {
+  const gw = fakeGateway();
+  let plain: FakeStreamServer;
+  let shim: ReturnType<typeof createGoLiveShim>;
+
+  beforeAll(async () => {
+    plain = startFakeStreamServer();
+    shim = createGoLiveShim({ gateway: gw, meId: ME, lib, declareSsrc: false });
+    shim.attachVoice(GUILD, CHANNEL, OUR_SESSION);
+    const ready = shim.streamer.createStream();
+    gw.dispatch("STREAM_CREATE", { stream_key: KEY, rtc_server_id: RTC_SERVER_ID, viewer_ids: [], paused: false });
+    gw.dispatch("STREAM_SERVER_UPDATE", { stream_key: KEY, endpoint: plain.endpoint, token: "stream-token-falso" });
+    await Promise.race([ready, Bun.sleep(5000)]);
+  });
+
+  afterAll(() => {
+    shim.destroy();
+    plain.stop();
+  });
+
+  test("the offer goes without a=ssrc, as the library sends it", () => {
+    const select = plain.ops.find((o) => o.op === 1)?.d;
+    expect(select.sdp).toMatch(/a=fingerprint/);
+    expect(select.sdp).not.toMatch(/^a=ssrc:/m);
+  });
+});

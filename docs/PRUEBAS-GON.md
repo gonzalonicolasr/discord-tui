@@ -86,6 +86,9 @@ terminar en ban (ver `docs/protocol-notes.md`, "Transmitir pantalla").
 - [ ] Tu amigo hace click en "LIVE" en tu nombre y te cuenta: ¿ve la pantalla? ¿fluido o trabado? ¿tarda en arrancar (debería
       verse en ≤ 2 s, hay keyframe cada 2 s)? ¿se oye el audio de tu PC (poné algo a sonar) y NO se escuchan a sí mismos (sin eco de la llamada)? En su cliente, ¿el stream
       muestra el candado / código de privacidad E2EE? Cuando entra, la barra pasa a `👁 1`.
+- [ ] Si la transmisión no arranca (`✗ transmisión: Discord no respondió al pedido de transmitir…`): salí con `q` y probá
+      `ZCORD_GOLIVE_SSRC=0 bun run dev`, que manda la oferta sin `a=ssrc:` (como antes del 2026-11-17). Si así arranca, avisame:
+      Discord no acepta el SSRC declarado y hay que dejarlo apagado.
 - [ ] Mientras transmitís, en la lista de la izquierda vos (y cualquiera que transmita) figura con `📺 en vivo`.
 - [ ] `🔴 EN VIVO · detener` → tu amigo deja de verla. Probá también salir de la voz transmitiendo (`✕ salir`): corta solo.
 - [ ] Con la TUI todavía abierta y sin transmitir: `pgrep -a "wf-recorder|ffmpeg|grim"` no muestra nada, y `pw-link -l | grep zcord-golive`

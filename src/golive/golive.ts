@@ -58,6 +58,15 @@ interface Active {
 }
 
 /** `ZCORD_GOLIVE_AUDIO`: "1" = el audio de la PC, "silence" = silencio (prueba), cualquier otra cosa = sin audio. */
+/**
+ * `ZCORD_GOLIVE_SSRC`: "0" = la oferta sale sin `a=ssrc:` (como la manda la librería). Cualquier otra cosa = se declara
+ * el SSRC de video, para que el RTCP de Discord llegue al track (shim.ts, `declareVideoSsrc`). Es el único cambio que
+ * Discord tiene que aceptar: si con él no arranca la transmisión, se apaga sin revertir.
+ */
+export function goLiveSsrcFromEnv(value: string | undefined): boolean {
+  return value !== "0";
+}
+
 export function goLiveAudioFromEnv(value: string | undefined): boolean | "silence" {
   if (value === "1") return true;
   if (value === "silence") return "silence";
@@ -80,6 +89,8 @@ export function createGoLive(deps: {
    * nada de la PC ni usar PipeWire.
    */
   desktopAudio?: boolean | "silence";
+  /** Declarar el SSRC de video en la oferta (por defecto, `ZCORD_GOLIVE_SSRC` distinto de "0"). */
+  declareSsrc?: boolean;
   /** Diagnóstico de la transmisión (inyectable para los tests). */
   stats?: (conn: unknown) => StreamStats;
 }): GoLive {
@@ -90,6 +101,7 @@ export function createGoLive(deps: {
   const loadLib = deps.loadLib ?? loadGoLiveLib;
   const desktopAudio = deps.desktopAudio ?? goLiveAudioFromEnv(process.env.ZCORD_GOLIVE_AUDIO);
   const silence = desktopAudio === "silence";
+  const declareSsrc = deps.declareSsrc ?? goLiveSsrcFromEnv(process.env.ZCORD_GOLIVE_SSRC);
   const makeStats = deps.stats ?? ((conn: unknown) => watchStream(conn, { log }));
 
   /** El diagnóstico nunca corta ni frena la transmisión: si tira, se sigue sin él. */
@@ -253,7 +265,7 @@ export function createGoLive(deps: {
       log.error("golive.codec-mismatch", { mode: codec, op });
       notice(STREAM_ERRORS.codecMismatch(codec), "error", "golive-codec");
     };
-    const shim = createGoLiveShim({ gateway, meId: me, lib, onCodec });
+    const shim = createGoLiveShim({ gateway, meId: me, lib, onCodec, declareSsrc });
     a.shim = shim;
     shim.attachVoice(a.guildId, a.channelId, sessionId);
     wrapCreateStream(a, shim.streamer);

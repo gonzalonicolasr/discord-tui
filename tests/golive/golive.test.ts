@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import type { CaptureEnv, ProcLike } from "../../src/golive/capture";
 import { STREAM_ERRORS } from "../../src/golive/errors";
-import { createGoLive, goLiveAudioFromEnv } from "../../src/golive/golive";
+import { createGoLive, goLiveAudioFromEnv, goLiveSsrcFromEnv } from "../../src/golive/golive";
 import { createStore, emptyState } from "../../src/store/store";
 import { fakeCapture, fakeGoLiveLib } from "../fakes/fake-golive";
 import { fakeGateway } from "../fakes/fake-stream-server";
@@ -194,6 +194,13 @@ describe("PC audio", () => {
     expect(goLiveAudioFromEnv(undefined)).toBe(false);
     expect(goLiveAudioFromEnv("0")).toBe(false);
     expect(goLiveAudioFromEnv("yes")).toBe(false);
+  });
+
+  test("ZCORD_GOLIVE_SSRC: on unless it is exactly 0 (declaring the video SSRC in the offer)", () => {
+    expect(goLiveSsrcFromEnv(undefined)).toBe(true);
+    expect(goLiveSsrcFromEnv("1")).toBe(true);
+    expect(goLiveSsrcFromEnv("")).toBe(true);
+    expect(goLiveSsrcFromEnv("0")).toBe(false);
   });
 
   test("without the PipeWire tools: video only, as before, with a notice", async () => {
