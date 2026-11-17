@@ -70,12 +70,38 @@ export function watchStream(
   let stopped = false;
   let wsSeen = 0;
   let hooked: any = null;
+  let timer: ReturnType<typeof setInterval> | null = null;
+
+  /**
+   * Algo del diagnóstico tiró (una forma inesperada de la librería): se apaga solo, con una línea en el log, y la
+   * transmisión sigue. Nunca tira: en Bun una excepción en un interval o un rechazo sin manejar terminan el proceso.
+   */
+  const off = (error: unknown): void => {
+    stopped = true;
+    if (timer) clearInterval(timer);
+    timer = null;
+    try {
+      deps.log.info("golive.stats", { state: "off", error_name: error instanceof Error ? error.name : "error" });
+    } catch {
+      // ni el log anda: no queda nada que hacer
+    }
+  };
+  /** Corre `fn` y, si tira, apaga el diagnóstico. */
+  const safe = (fn: () => void): void => {
+    if (stopped) return;
+    try {
+      fn();
+    } catch (error) {
+      off(error);
+    }
+  };
 
   const wrap = (name: "sendVideoFrame" | "sendAudioFrame", track: Track): void => {
     const original = conn?.[name];
     if (typeof original !== "function") return;
     conn[name] = function (frame: unknown, frametime: number) {
-      if (!stopped) {
+      // Contar nunca puede romper el envío de la librería.
+      safe(() => {
         // La librería manda solo con el PeerConnection conectado; si no, lo tira sin avisar.
         if (conn.ready === false) track.dropped++;
         else {
@@ -83,12 +109,10 @@ export function watchStream(
           track.mediaMs += Number.isFinite(frametime) ? frametime : 0;
           track.lastAt = now();
         }
-      }
+      });
       return original.call(this, frame, frametime);
     };
   };
-  wrap("sendVideoFrame", video);
-  wrap("sendAudioFrame", audio);
 
   const count = (into: Record<string, number>, op: string | null): void => {
     if (op !== null) into[op] = (into[op] ?? 0) + 1;
@@ -102,17 +126,20 @@ export function watchStream(
     wsSeen++;
     // Entrante binario: seq (2 bytes) + op. Saliente binario: op primero.
     ws.addEventListener?.("message", (e: { data: unknown }) => {
-      if (!stopped && hooked === ws) count(opsIn, opOf(e?.data, 2));
+      safe(() => {
+        if (hooked === ws) count(opsIn, opOf(e?.data, 2));
+      });
     });
     const send = ws.send;
     if (typeof send === "function") {
       ws.send = function (data: unknown) {
-        if (!stopped && hooked === ws) count(opsOut, opOf(data, 0));
+        safe(() => {
+          if (hooked === ws) count(opsOut, opOf(data, 0));
+        });
         return send.call(this, data);
       };
     }
   };
-  hookWs();
 
   const idle = (t: Track, at: number): number | null => (t.lastAt === null ? null : Math.round(at - t.lastAt));
 
@@ -157,19 +184,33 @@ export function watchStream(
     deps.log.info("golive.stats", { ...(state ? { state } : {}), msg: JSON.stringify(msg) });
   };
 
+  // Si engancharse falla (conexión congelada, propiedad de solo lectura), el diagnóstico queda apagado desde el arranque.
+  safe(() => {
+    wrap("sendVideoFrame", video);
+    wrap("sendAudioFrame", audio);
+    hookWs();
+  });
+
   const intervalMs = deps.intervalMs ?? STATS_INTERVAL_MS;
-  const timer = intervalMs > 0 ? setInterval(() => line(), intervalMs) : null;
-  (timer as { unref?: () => void } | null)?.unref?.();
+  if (!stopped && intervalMs > 0) {
+    timer = setInterval(() => safe(() => line()), intervalMs);
+    (timer as { unref?: () => void }).unref?.();
+  }
 
   return {
     report(): void {
-      if (!stopped) line();
+      safe(() => line());
     },
     stop(why: string): void {
       if (stopped) return;
-      line(why);
+      try {
+        line(why);
+      } catch {
+        // la última línea no salió: igual se apaga
+      }
       stopped = true;
       if (timer) clearInterval(timer);
+      timer = null;
     },
   };
 }

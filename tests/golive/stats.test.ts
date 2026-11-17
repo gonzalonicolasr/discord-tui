@@ -147,3 +147,98 @@ describe("go live stats", () => {
     stats.stop("idle");
   });
 });
+
+// El diagnóstico nunca puede tirar abajo zcord ni la transmisión: en Bun una excepción en un interval o un rechazo sin
+// manejar terminan el proceso. Ante cualquier error se apaga solo, con una línea en el log.
+describe("go live stats never throw", () => {
+  function collect() {
+    const lines: Array<{ event: string; fields: any }> = [];
+    return { lines, log: { info: (event: string, fields: any) => void lines.push({ event, fields }) } };
+  }
+
+  test("a frozen connection: watchStream does not throw, says it is off and the frames still go out", () => {
+    const c = collect();
+    let sent = 0;
+    const conn = Object.freeze({ ready: true, sendVideoFrame: () => void sent++, sendAudioFrame: () => void sent++ });
+    let stats: ReturnType<typeof watchStream> | null = null;
+    expect(() => (stats = watchStream(conn, { log: c.log, intervalMs: 5 }))).not.toThrow();
+    expect(c.lines.at(-1)).toMatchObject({ event: "golive.stats", fields: { state: "off" } });
+    conn.sendVideoFrame();
+    expect(sent).toBe(1);
+    expect(() => stats!.report()).not.toThrow();
+    expect(() => stats!.stop("idle")).not.toThrow();
+  });
+
+  test("a getter that throws: report() does not throw, the diagnostics switch off once and the timer stops", async () => {
+    const c = collect();
+    const conn: any = fakeConn();
+    const ws = conn.mediaConnection.ws;
+    conn.mediaConnection = {
+      ws,
+      get daveReady() {
+        throw new TypeError("session disposed");
+      },
+    };
+    const stats = watchStream(conn, { log: c.log, intervalMs: 5 });
+    expect(() => stats.report()).not.toThrow();
+    expect(c.lines.filter((l) => l.fields?.state === "off")).toHaveLength(1);
+    const n = c.lines.length;
+    await Bun.sleep(40); // varios ticks del timer real
+    expect(c.lines.length).toBe(n);
+    expect(() => stats.stop("idle")).not.toThrow();
+  });
+
+  test("the real timer: a tick that throws switches off instead of throwing out of the interval", async () => {
+    const c = collect();
+    const conn: any = fakeConn();
+    let fail = false;
+    conn.webRtcConn = null;
+    Object.defineProperty(conn, "mediaConnection", {
+      get() {
+        if (fail) throw new TypeError("gone");
+        return { ws: null };
+      },
+    });
+    watchStream(conn, { log: c.log, intervalMs: 5 });
+    fail = true;
+    await Bun.sleep(40);
+    expect(c.lines.filter((l) => l.fields?.state === "off")).toHaveLength(1);
+    const n = c.lines.length;
+    await Bun.sleep(30);
+    expect(c.lines.length).toBe(n);
+  });
+
+  test("stop() whose last line throws does not throw and leaves no timer running", async () => {
+    let calls = 0;
+    const conn: any = fakeConn();
+    const stats = watchStream(conn, {
+      log: {
+        info: () => {
+          calls++;
+          throw new Error("disk full");
+        },
+      },
+      intervalMs: 5,
+    });
+    expect(() => stats.stop("idle")).not.toThrow();
+    const n = calls;
+    await Bun.sleep(40);
+    expect(calls).toBe(n);
+  });
+
+  test("counting can never break the library's send: a ready getter that throws still reaches the original", () => {
+    const c = collect();
+    let calls = 0;
+    const conn: any = {
+      get ready(): boolean {
+        throw new TypeError("odd");
+      },
+      sendVideoFrame: () => void calls++,
+      sendAudioFrame: () => void calls++,
+    };
+    watchStream(conn, { log: c.log, intervalMs: 0 });
+    expect(() => conn.sendVideoFrame(Buffer.alloc(1), 33)).not.toThrow();
+    expect(() => conn.sendAudioFrame(Buffer.alloc(1), 20)).not.toThrow();
+    expect(calls).toBe(2);
+  });
+});

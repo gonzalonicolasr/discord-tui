@@ -17,13 +17,20 @@ function textProc(text: string): ProcLike {
   return { pid: 1, stdout: new Response(text).body!, exited: Promise.resolve(0), kill() {} };
 }
 
-function setup(opts: { tools?: string[]; monitors?: unknown[]; inVoice?: boolean; session?: boolean; pwDumpExit?: number; failWithAudio?: boolean; audioReady?: Promise<boolean> | boolean; desktopAudio?: boolean } = {}) {
+function setup(opts: { tools?: string[]; monitors?: unknown[]; inVoice?: boolean; session?: boolean; pwDumpExit?: number; failWithAudio?: boolean; audioReady?: Promise<boolean> | boolean; desktopAudio?: boolean; statsFails?: "start" | "stop" } = {}) {
   /** Diagnóstico falso: con qué conexión arrancó y cómo terminó cada uno. */
   const statsRuns: Array<{ conn: unknown; stops: string[] }> = [];
   const stats = (conn: unknown) => {
+    if (opts.statsFails === "start") throw new TypeError("odd library");
     const run = { conn, stops: [] as string[] };
     statsRuns.push(run);
-    return { report() {}, stop: (why: string) => void run.stops.push(why) };
+    return {
+      report() {},
+      stop: (why: string) => {
+        run.stops.push(why);
+        if (opts.statsFails === "stop") throw new TypeError("odd library");
+      },
+    };
   };
   const store = createStore(emptyState());
   store.dispatch({
@@ -332,6 +339,30 @@ describe("stop", () => {
     await goLive(s, "DP-1");
     await s.capture.die();
     expect(s.statsRuns[1]!.stops[0]).toBe("error");
+  });
+
+  test("diagnostics that throw when starting: the stream still goes live and stops cleanly", async () => {
+    const s = setup({ statsFails: "start" });
+    await goLive(s, "DP-1");
+    expect(s.stream().status).toBe("live");
+    await s.golive.stop();
+    expect(s.stream().status).toBe("idle");
+    expect(s.capture.stops()).toBe(1);
+    expect(s.gw.sent.filter((x) => x.op === 19)).toHaveLength(1);
+  });
+
+  test("diagnostics whose stop throws: stopping still cuts everything", async () => {
+    const s = setup({ statsFails: "stop" });
+    await goLive(s, "DP-1");
+    await s.golive.stop();
+    expect(s.stream().status).toBe("idle");
+    expect(s.capture.stops()).toBe(1);
+    expect(s.gw.sent.filter((x) => x.op === 19)).toHaveLength(1);
+    await goLive(s, "DP-1");
+    s.fake.closeWs(4006);
+    await Bun.sleep(1);
+    expect(s.stream().status).toBe("error");
+    expect(s.capture.stops()).toBe(2);
   });
 
   test("with the PC audio the diagnostics watch the one stream asked for early, not a second one", async () => {

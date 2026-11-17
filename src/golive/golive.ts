@@ -80,7 +80,28 @@ export function createGoLive(deps: {
   const pickEncoder = deps.pickEncoder ?? ((e: CaptureEnv) => pickEncoderDefault(e));
   const loadLib = deps.loadLib ?? loadGoLiveLib;
   const desktopAudio = deps.desktopAudio ?? process.env.ZCORD_GOLIVE_AUDIO === "1";
-  const startStats = deps.stats ?? ((conn: unknown) => watchStream(conn, { log }));
+  const makeStats = deps.stats ?? ((conn: unknown) => watchStream(conn, { log }));
+
+  /** El diagnóstico nunca corta ni frena la transmisión: si tira, se sigue sin él. */
+  function startStats(conn: unknown): StreamStats | null {
+    try {
+      return makeStats(conn);
+    } catch (error) {
+      log.warn("golive.stats", { state: "off", error_name: error instanceof Error ? error.name : "error" });
+      return null;
+    }
+  }
+
+  /** Última línea del diagnóstico (antes de cerrar la conexión, para que todavía vea su estado). Nunca tira. */
+  function stopStats(a: Active, why: string): void {
+    const stats = a.stats;
+    a.stats = null;
+    try {
+      stats?.stop(why);
+    } catch {
+      // el diagnóstico falló al terminar: lo esencial sigue igual
+    }
+  }
   let lib: GoLiveLib | null = null;
   let active: Active | null = null;
   let stopping: Promise<void> = Promise.resolve();
@@ -104,8 +125,7 @@ export function createGoLive(deps: {
     if (active !== a) return stopping;
     active = null;
     a.abort.abort();
-    a.stats?.stop(error ? "error" : "idle");
-    a.stats = null;
+    stopStats(a, error ? "error" : "idle");
     a.shim?.destroy(); // op 19 si llegó a mandar el op 18
     a.shim = null;
     a.conn = null;
@@ -153,7 +173,7 @@ export function createGoLive(deps: {
               ws?.addEventListener?.("close", (e: { code: number; reason?: string }) => {
                 const message = streamCloseMessage(e.code);
                 log.warn("golive.ws-closed", { close_code: e.code, msg: String(e.reason ?? "").slice(0, 80) });
-                if (active === a) a.stats?.stop(`ws-${e.code}`);
+                if (active === a) stopStats(a, `ws-${e.code}`);
                 if (message && active === a) void finish(a, message);
               });
               setStream({ status: "live" });
