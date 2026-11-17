@@ -338,6 +338,32 @@ Spike del 2026-11-08, sin la cuenta (todo contra fakes locales). Scripts en `scr
 
 **🧍 Paso de Gon:** ya no hay script aparte (`golive-spike.ts` se borró): se prueba desde la app, `docs/PRUEBAS-GON.md` sección 6.
 
+## Go Live y ver: RTCP, códecs y diagnóstico (2026-11-17, Error 2012)
+
+Medido en local (fakes, loopback de libdatachannel y video sintético; sin Discord):
+- **RTCP al que transmite:** con dos m-lines (audio mid 0 + video mid 1) y sin `a=ssrc` en la SDP local, libdatachannel no
+  sabe a qué track va el RTCP que llega y lo tira: el `RtcpNackResponder` de la librería nunca veía un NACK (loopback: 0 de
+  4 paquetes RTCP sin `a=ssrc`, 4 de 4 con). El shim agrega `a=ssrc:<video_ssrc del op 2>` a la oferta
+  (`declareVideoSsrc`). **[sin verificar]** que Discord lo acepte (es lo que hace un navegador).
+- **Retransmisión:** aun con el NACK ruteado, el reenvío del `RtcpNackResponder` sale con el mismo SSRC y el mismo número
+  de secuencia; un receptor con libsrtp lo descarta como replay (en local nunca llegó). Los clientes oficiales usan RTX.
+  Si el SFU de Discord hace lo mismo, al transmitir no hay recuperación de pérdidas: un paquete perdido de un IDR deja a
+  ese espectador sin imagen hasta el IDR siguiente (2 s).
+- **Pacing:** un IDR de 1080p con mucho detalle (77-88 paquetes, ~90 KB) sale en ~70 ms, ~1,07 ms entre paquetes (máx. 11
+  paquetes en 5 ms); `UdpSndbufErrors` no se movió. Payload RTP máximo: 1220 bytes.
+- **Tamaño de los IDR** (ffmpeg con los mismos argumentos de capture.ts, nvenc CBR): 1080p ruido 83-220 KB (el primero es el
+  más grande), 1080p testsrc2 36-43 KB; 720p ruido 86-118 KB, 720p testsrc2 25-31 KB. El VBV (`-bufsize` = bitrate/2) acota.
+- **Códecs:** la librería ofrecía H264, H265, VP8, VP9 y AV1 con la misma prioridad y nunca lee el `video_codec` del op 4
+  ni el op 14. El shim deja solo H264 + opus en el op 1 (`onlyH264`) y avisa si el servidor elige otro
+  (`golive.codec-mismatch`). La oferta declara `profile-level-id=42e01f` (nivel 3.1) y a 1080p mandamos High 4.0.
+- **Zombi al cortar:** el manejador de cierre de la librería reanudaba (op 7 RESUME) también el cierre 1000 de su propio
+  `stop()`: al terminar de transmitir o de mirar, reabría el WS del stream. Arreglado (`noResumeAfterStop`).
+- **Feedback del que mira** (viewer.ts): RR (uno por SR), FIR (eso manda `Track.requestKeyframe()` de libdatachannel) y
+  nuestro PLI con nuestro SSRC. No manda REMB, transport-cc ni NACK, y descarta el RTX (PT 102).
+- **Diagnóstico nuevo:** watch.diag `neg`, `pt`, `rx` (histograma de NAL, marker, tamaños, padding, bit F, saltos y huecos) y
+  `win` (saltos y paquetes faltantes desde el diag anterior); golive.stats `neg`, `upd`/`upd_n` (op 14), `codec`, `kf`,
+  `kfs` y `rtcp` (PLI, FIR, NACK, RR con pérdida, REMB). Campos en src/golive/stats.ts y src/watch/h264.ts.
+
 ## Ver transmisiones
 
 Producto desde el 2026-11-08 (`src/watch/`), sin probar contra Discord: todo verificado contra fakes, un loopback local (nuestro
