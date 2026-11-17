@@ -349,6 +349,7 @@ describe("stop", () => {
     await s.golive.start("DP-1");
     await s.fake.ready("AV1");
     expect(s.notices()).toContain(STREAM_ERRORS.codecMismatch("AV1"));
+    expect(Object.values(s.store.getState().notices).some((n: any) => n.key === "golive-codec")).toBe(true);
     expect(s.stream().status).toBe("live"); // no se corta: el aviso dice por qué no lo ven
   });
 
@@ -356,7 +357,9 @@ describe("stop", () => {
     const s = setup();
     await s.golive.start("DP-1");
     await s.fake.ready("H264");
-    expect(s.notices().some((t) => t.includes("códec"))).toBe(false);
+    expect(s.stream().status).toBe("live");
+    expect(Object.values(s.store.getState().notices).some((n: any) => n.key === "golive-codec")).toBe(false);
+    expect(s.notices()).not.toContain(STREAM_ERRORS.codecMismatch("H264"));
   });
 
   test("the stream diagnostics start once the stream is ready and end with the reason (WS close code first)", async () => {
