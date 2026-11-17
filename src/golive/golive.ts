@@ -173,7 +173,8 @@ export function createGoLive(deps: {
               ws?.addEventListener?.("close", (e: { code: number; reason?: string }) => {
                 const message = streamCloseMessage(e.code);
                 log.warn("golive.ws-closed", { close_code: e.code, msg: String(e.reason ?? "").slice(0, 80) });
-                if (active === a) stopStats(a, `ws-${e.code}`);
+                // Un cierre reanudable (message null) no corta: la librería abre otro WS y el diagnóstico lo engancha.
+                if (message && active === a) stopStats(a, `ws-${e.code}`);
                 if (message && active === a) void finish(a, message);
               });
               setStream({ status: "live" });

@@ -341,6 +341,18 @@ describe("stop", () => {
     expect(s.statsRuns[1]!.stops[0]).toBe("error");
   });
 
+  test("a resumable WS close keeps the diagnostics running (they hook the new WS); a final one ends them", async () => {
+    const s = setup();
+    await goLive(s, "DP-1");
+    s.fake.closeWs(1006);
+    await Bun.sleep(1);
+    expect(s.stream().status).toBe("live");
+    expect(s.statsRuns[0]!.stops).toEqual([]);
+    s.fake.closeWs(4006);
+    await Bun.sleep(1);
+    expect(s.statsRuns[0]!.stops).toEqual(["ws-4006"]);
+  });
+
   test("diagnostics that throw when starting: the stream still goes live and stops cleanly", async () => {
     const s = setup({ statsFails: "start" });
     await goLive(s, "DP-1");
