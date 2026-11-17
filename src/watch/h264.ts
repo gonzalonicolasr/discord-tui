@@ -286,15 +286,22 @@ export class RtpH264Stats {
   private stap = new Map<number, number>();
   private fu = new Map<number, number>();
   private fuStart = 0;
+  /** Lo mismo desde la última llamada a `window()`. */
+  private win = { n: 0, jumps: 0, gap: 0 };
 
   observe(pkt: RtpPacket): void {
     this.n++;
+    this.win.n++;
     if (pkt.marker) this.marker++;
     if (this.lastSeq !== null) {
       const d = seqDiff(pkt.sequence, this.lastSeq);
       if (d !== 1) {
         this.jumps++;
-        if (d > 1 && d < 1000) this.gap += d - 1;
+        this.win.jumps++;
+        if (d > 1 && d < 1000) {
+          this.gap += d - 1;
+          this.win.gap += d - 1;
+        }
       }
     }
     this.lastSeq = pkt.sequence;
@@ -326,6 +333,13 @@ export class RtpH264Stats {
       bump(this.fu, p[1]! & 0x1f);
       if (p[1]! & 0x80) this.fuStart++;
     } else bump(this.single, type);
+  }
+
+  /** Paquetes, saltos y paquetes faltantes desde la llamada anterior (watch.diag: cada 2 s). */
+  window(): { n: number; jumps: number; gap: number } {
+    const w = this.win;
+    this.win = { n: 0, jumps: 0, gap: 0 };
+    return w;
   }
 
   summary() {

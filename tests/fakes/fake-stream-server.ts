@@ -33,7 +33,7 @@ export interface FakeStreamServer {
  * del op 4 (1 por defecto; 0 = sin E2EE).
  */
 export function startFakeStreamServer(
-  opts: { relay?: boolean; dave?: number; streamerId?: string; /** video_codec del op 4 (H264 por defecto). */ videoCodec?: string; /** Cada paquete de video que llega del que transmite (con la hora). */ onStreamerPacket?: (msg: Buffer, at: number) => void } = {},
+  opts: { relay?: boolean; dave?: number; streamerId?: string; /** video_codec del op 4 (H264 por defecto). */ videoCodec?: string; /** Cada paquete de video que llega del que transmite (con la hora). */ onStreamerPacket?: (msg: Buffer, at: number) => void; /** Cada paquete que llega por el track de video de uno que mira (su RTCP). */ onViewerPacket?: (msg: Buffer) => void } = {},
 ): FakeStreamServer {
   const dir = mkdtempSync(join(tmpdir(), "golive-tls-"));
   Bun.spawnSync(
@@ -124,7 +124,7 @@ export function startFakeStreamServer(
               if (t.mid() !== "1") return;
               me.videoTrack = t;
               t.onMessage((msg: Buffer) => {
-                if (!me.streaming) return;
+                if (!me.streaming) return void opts.onViewerPacket?.(msg);
                 opts.onStreamerPacket?.(msg, performance.now());
                 for (const c of conns.values()) {
                   if (c === me || !c.videoTrack?.isOpen()) continue;
@@ -140,7 +140,11 @@ export function startFakeStreamServer(
           // libdatachannel tira el RTP de un SSRC que no está en la SDP: se le agregan los que asignó el READY.
           // El cliente arma la SDP del server con `a=setup:passive` (Discord es el servidor DTLS): se fuerza el rol.
           const offer = opts.relay
-            ? String(d.sdp).replace(/a=setup:actpass/g, "a=setup:active").replace(/(a=mid:1\r?\n)/, `$1a=ssrc:${me.ssrc + 1} cname:fake\r\na=ssrc:${me.ssrc + 2} cname:fake\r\n`)
+            ? String(d.sdp).replace(/a=setup:actpass/g, "a=setup:active").replace(
+                  /(a=mid:1\r?\n)/,
+                  // + el video del primero que transmite (1001): así le llega al server el RTCP de los que miran sobre ese video.
+                  `$1a=ssrc:${me.ssrc + 1} cname:fake\r\na=ssrc:${me.ssrc + 2} cname:fake\r\n${me.ssrc === 1000 ? "" : "a=ssrc:1001 cname:fake\r\n"}`,
+                )
             : d.sdp;
           peer.setRemoteDescription(offer, "offer");
         }

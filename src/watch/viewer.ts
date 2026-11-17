@@ -385,6 +385,7 @@ export function createViewerConnection(lib: ViewerLib, p: ViewerParams, events: 
         neg: negotiated,
         pt: [...pts.entries()].sort((a, b) => a[0] - b[0]).map(([k, v]) => `${k}:${v}`).join(","),
         rx: rx.summary(),
+        win: rx.window(),
       };
     },
     stop() {

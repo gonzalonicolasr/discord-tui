@@ -166,3 +166,13 @@ describe("RtpH264Stats (numbers for watch.diag)", () => {
     expect(new RtpH264Stats().summary()).toEqual({ n: 0, mk: 0, pay: "-", pad: 0, fbit: 0, jumps: 0, gap: 0, ts: 0, nal: "", stap: "", fu: "", fuS: 0 });
   });
 });
+
+test("RtpH264Stats.window(): sequence jumps and missing packets since the previous call", () => {
+  const s = new RtpH264Stats();
+  for (const seq of [1, 2, 5, 6]) s.observe(pkt({ seq, ts: 0, payload: P })); // faltan 3 y 4
+  expect(s.window()).toEqual({ n: 4, jumps: 1, gap: 2 });
+  expect(s.window()).toEqual({ n: 0, jumps: 0, gap: 0 });
+  for (const seq of [7, 10]) s.observe(pkt({ seq, ts: 0, payload: P }));
+  expect(s.window()).toEqual({ n: 2, jumps: 1, gap: 2 });
+  expect(s.summary()).toMatchObject({ n: 6, jumps: 2, gap: 4 }); // el total sigue
+});

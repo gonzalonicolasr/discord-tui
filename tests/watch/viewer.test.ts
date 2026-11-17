@@ -49,6 +49,7 @@ function describe_e2e() {
   const aus: Uint8Array[] = [];
   const closes: number[] = [];
   let decodedFrames = 0;
+  const viewerRtcp = new Map<string, number>();
   let abort: AbortController;
   let shim: ReturnType<typeof createGoLiveShim>;
   let playing: Promise<unknown> = Promise.resolve();
@@ -56,7 +57,18 @@ function describe_e2e() {
   beforeAll(async () => {
     if (!hasFfmpeg) return;
     process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"; // certificado propio del server falso; se restaura al final
-    server = startFakeStreamServer({ relay: true, dave: 0, streamerId: STREAMER });
+    server = startFakeStreamServer({
+      relay: true,
+      dave: 0,
+      streamerId: STREAMER,
+      onViewerPacket: (m) => {
+        // RTCP compuesto: cada paquete por "pt/fmt"
+        for (let o = 0; o + 4 <= m.length && m[o]! >> 6 === 2; o += (m.readUInt16BE(o + 2) + 1) * 4) {
+          const k = `${m[o + 1]}/${m[o]! & 31}`;
+          viewerRtcp.set(k, (viewerRtcp.get(k) ?? 0) + 1);
+        }
+      },
+    });
     const lib = await loadGoLiveLib();
     const gw = fakeGateway();
     shim = createGoLiveShim({ gateway: gw, meId: STREAMER, lib });
@@ -138,6 +150,8 @@ function describe_e2e() {
     const d = viewer!.diag!();
     expect(d.neg).toBe("H264/opus/v0/?");
     expect(d.pt).toMatch(/^101:\d+/);
+    expect(d.win).toMatchObject({ jumps: 0, gap: 0 }); // en local no se pierde nada
+    expect((d.win as { n: number }).n).toBeGreaterThan(0);
     const rx = d.rx as Record<string, unknown>;
     expect(rx.n).toBeGreaterThan(100);
     expect(rx.mk).toBeGreaterThan(30);
@@ -148,6 +162,14 @@ function describe_e2e() {
     expect(text).not.toContain("a=");
     expect(text).not.toContain(STREAMER);
     expect(text).not.toContain("stream-token");
+  });
+
+  test.skipIf(!hasFfmpeg)("feedback the viewer sends back: receiver reports and a keyframe request as FIR (libdatachannel) plus our PLI; no REMB, no NACK", () => {
+    expect(viewerRtcp.get("201/1") ?? 0).toBeGreaterThan(0); // RR
+    expect(viewerRtcp.get("206/4") ?? 0).toBeGreaterThan(0); // FIR de requestKeyframe()
+    expect(viewerRtcp.get("206/1") ?? 0).toBeGreaterThan(0); // nuestro PLI con nuestro SSRC
+    expect(viewerRtcp.has("206/15")).toBe(false); // sin REMB
+    expect(viewerRtcp.has("205/1")).toBe(false); // sin NACK
   });
 
   test.skipIf(!hasFfmpeg)("the viewer never sends media attributes of its own (no op 12 from it)", () => {
