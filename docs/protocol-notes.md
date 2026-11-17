@@ -345,10 +345,12 @@ Medido en local (fakes, loopback de libdatachannel y video sintético; sin Disco
   sabe a qué track va el RTCP que llega y lo tira: el `RtcpNackResponder` de la librería nunca veía un NACK (loopback: 0 de
   4 paquetes RTCP sin `a=ssrc`, 4 de 4 con). El shim agrega `a=ssrc:<video_ssrc del op 2>` a la oferta
   (`declareVideoSsrc`). **[sin verificar]** que Discord lo acepte (es lo que hace un navegador).
-- **Retransmisión:** aun con el NACK ruteado, el reenvío del `RtcpNackResponder` sale con el mismo SSRC y el mismo número
-  de secuencia; un receptor con libsrtp lo descarta como replay (en local nunca llegó). Los clientes oficiales usan RTX.
-  Si el SFU de Discord hace lo mismo, al transmitir no hay recuperación de pérdidas: un paquete perdido de un IDR deja a
-  ese espectador sin imagen hasta el IDR siguiente (2 s).
+- **Retransmisión** (medido con un proxy UDP entre dos PeerConnection locales, que tira un paquete de video elegido antes de
+  que llegue; el encabezado RTP de SRTP va en claro): con el NACK ruteado (`a=ssrc` local), el `RtcpNackResponder` reenvía
+  el paquete perdido (mismo SSRC y número de secuencia) y **el receptor lo acepta** (0 → 1, con una m-line y con audio +
+  video). Si el paquete ya había llegado, el reenvío sale igual pero el receptor lo descarta (replay de SRTP): por eso la
+  primera medición, que pedía uno ya recibido, parecía decir que no servía. Sin `a=ssrc` el NACK no llega al track y no hay
+  reenvío. **[sin verificar]** cómo lo trata el SFU de Discord (los clientes oficiales retransmiten por RTX).
 - **Pacing:** un IDR de 1080p con mucho detalle (77-88 paquetes, ~90 KB) sale en ~70 ms, ~1,07 ms entre paquetes (máx. 11
   paquetes en 5 ms); `UdpSndbufErrors` no se movió. Payload RTP máximo: 1220 bytes.
 - **Tamaño de los IDR** (ffmpeg con los mismos argumentos de capture.ts, nvenc CBR): 1080p ruido 83-220 KB (el primero es el
