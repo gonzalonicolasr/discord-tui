@@ -168,16 +168,18 @@ export async function listMonitors(env: CaptureEnv = defaultCaptureEnv, timeoutM
 
 /**
  * Comando de wf-recorder: wlr-screencopy sin portal, video crudo yuv420p a 30 fps, NUT por stdout.
- * `noDamage` (con el audio de la PC): un frame cada 1/30 s aunque la pantalla no cambie. Sin eso, con la
- * pantalla quieta no sale ningún frame (medido 2026-11-15) y ffmpeg frena el audio hasta que llegue video (su
- * planificador no deja que una entrada se adelante más de 100 ms a la otra).
+ * Siempre con `-D` (sin seguimiento de daño): un frame cada 1/30 s aunque la pantalla no cambie. Sin eso, con la
+ * pantalla quieta no sale ningún frame: el 2026-11-17, transmitiendo un monitor casi quieto, hubo hasta 33 s sin
+ * un solo cuadro (`golive.stats`, `v_idle_ms`), y a quien abría la transmisión en ese rato Discord le mostraba
+ * "No se ha podido iniciar la transmisión (Error 2012)" porque no le llegaba ni un keyframe. Con el audio de la PC
+ * además ffmpeg frenaría el audio (su planificador no deja que una entrada se adelante más de 100 ms a la otra).
  */
-export function wfRecorderCommand(monitor: string, quality: Pick<Quality, "fps">, opts: { noDamage?: boolean } = {}): string[] {
+export function wfRecorderCommand(monitor: string, quality: Pick<Quality, "fps">): string[] {
   return [
     "wf-recorder",
     "-y",
     ...(monitor ? ["-o", monitor] : []),
-    ...(opts.noDamage ? ["-D"] : []),
+    "-D",
     "-c",
     "rawvideo",
     "-m",
@@ -558,7 +560,7 @@ export function startCapture(opts: {
   if (opts.backend === "wf-recorder") {
     ffmpeg = track(env.spawn(ffArgs, { stdin: "ignore", stdout: "pipe", stderr: "pipe", ...fd3, fd4: "pipe" }));
     adoptFfmpegFds();
-    const video = feed(VIDEO_FD, wfRecorderCommand(opts.monitor, opts.quality, { noDamage: audio }));
+    const video = feed(VIDEO_FD, wfRecorderCommand(opts.monitor, opts.quality));
     capture = video;
     attachAudio();
     // Sin audio, ffmpeg ve el fin del video y termina solo. Con audio no: se queda esperando el audio y la

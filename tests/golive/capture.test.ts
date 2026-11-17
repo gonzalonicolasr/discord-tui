@@ -102,7 +102,7 @@ describe("monitors", () => {
 
 describe("commands", () => {
   test("wf-recorder: chosen output, raw yuv420p at 30 fps in NUT to stdout (pipe:1)", () => {
-    expect(wfRecorderCommand("DP-1", QUALITY["720p30"])).toEqual(["wf-recorder", "-y", "-o", "DP-1", "-c", "rawvideo", "-m", "nut", "-x", "yuv420p", "-r", "30", "-f", "pipe:1"]);
+    expect(wfRecorderCommand("DP-1", QUALITY["720p30"])).toEqual(["wf-recorder", "-y", "-o", "DP-1", "-D", "-c", "rawvideo", "-m", "nut", "-x", "yuv420p", "-r", "30", "-f", "pipe:1"]);
     expect(wfRecorderCommand("", QUALITY["720p30"])).not.toContain("-o");
   });
 
@@ -153,9 +153,10 @@ describe("commands", () => {
     expect(flag(args, "-b:v")).toBe("4500k");
   });
 
-  test("wf-recorder with the PC audio records every frame (-D): a still screen must not stall the audio", () => {
-    expect(wfRecorderCommand("DP-1", QUALITY["720p30"], { noDamage: true })).toEqual(["wf-recorder", "-y", "-o", "DP-1", "-D", "-c", "rawvideo", "-m", "nut", "-x", "yuv420p", "-r", "30", "-f", "pipe:1"]);
-    expect(wfRecorderCommand("DP-1", QUALITY["720p30"])).not.toContain("-D");
+  test("wf-recorder records every frame (-D), with or without the PC audio: a still screen must not stall the stream", () => {
+    // Sin -D, con la pantalla quieta no sale ningún frame: el que abre la transmisión no recibe ni un keyframe.
+    expect(wfRecorderCommand("DP-1", QUALITY["720p30"])).toContain("-D");
+    expect(wfRecorderCommand("", QUALITY["1080p30"])).toContain("-D");
   });
 
   test("ffmpeg with the PC audio: raw s16 48 kHz stereo from fd 3, Opus 48 kHz stereo in the same NUT, no -an", () => {
