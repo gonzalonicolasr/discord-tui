@@ -59,3 +59,17 @@ export function streamCloseMessage(code: number): string | null {
       return `se cortó la transmisión (código ${code})`;
   }
 }
+
+/**
+ * El motivo de cierre del WS del stream es texto libre del servidor: al log va solo lo imprimible (letras, números,
+ * espacio y `.,:'()_/-`), sin saltos de línea ni caracteres de control o bidi, y 80 caracteres como mucho.
+ */
+export function closeReasonForLog(reason: unknown): string {
+  if (typeof reason !== "string") return "";
+  return reason
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/[^A-Za-z0-9 .,:'()_/-]/g, "")
+    .replace(/ {2,}/g, " ")
+    .trim()
+    .slice(0, 80);
+}
