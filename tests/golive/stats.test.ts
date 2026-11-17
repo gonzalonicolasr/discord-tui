@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { negotiatedOf, watchStream } from "../../src/golive/stats";
+import { countRtcp, keyframeInfo, negotiatedOf, recordNegotiated, watchStream } from "../../src/golive/stats";
 import { fakeToken } from "../helpers/fake-token";
 
 /** WS falso con la forma de lo que usa la librería: addEventListener("message"/"close") y send(). */
@@ -360,5 +360,113 @@ describe("negotiatedOf (select protocol ack, op 4)", () => {
     expect(negotiatedOf(null)).toBe("?/?/v?/?");
     expect(negotiatedOf({ video_codec: "H264 with spaces", audio_codec: "x".repeat(50), dave_protocol_version: "1", mode: 3 })).toBe("?/?/v?/?");
     expect(negotiatedOf({ video_codec: "AV1", dave_protocol_version: 0 })).toBe("AV1/?/v0/?");
+  });
+});
+
+/** Paquetes RTCP armados a mano (RFC 3550 / 4585). */
+const rtcp = {
+  pli: (media: number) => Buffer.from([0x81, 206, 0, 2, 0, 0, 0x10, 0x92, ...u32(media)]),
+  fir: (media: number) => Buffer.from([0x84, 206, 0, 4, 0, 0, 0x10, 0x92, 0, 0, 0, 0, ...u32(media), 1, 0, 0, 0]),
+  /** NACK: pid + blp (cada bit de blp es otro paquete perdido). */
+  nack: (media: number, pid: number, blp: number) => Buffer.from([0x81, 205, 0, 3, 0, 0, 0x10, 0x92, ...u32(media), pid >> 8, pid & 0xff, blp >> 8, blp & 0xff]),
+  /** RR con un bloque: fraction lost (0-255) y cumulative lost. */
+  rr: (media: number, fraction: number, cumulative: number) =>
+    Buffer.from([0x81, 201, 0, 7, 0, 0, 0x10, 0x92, ...u32(media), fraction, (cumulative >> 16) & 0xff, (cumulative >> 8) & 0xff, cumulative & 0xff, ...new Array(16).fill(0)]),
+  /** REMB: bitrate = mantissa << exp. */
+  remb: (bps: number) => {
+    let exp = 0;
+    while (bps >> exp > 0x3ffff) exp++;
+    const m = bps >> exp;
+    return Buffer.from([0x8f, 206, 0, 5, 0, 0, 0x10, 0x92, 0, 0, 0, 0, 0x52, 0x45, 0x4d, 0x42, 1, (exp << 2) | ((m >> 16) & 3), (m >> 8) & 0xff, m & 0xff, ...u32(1001)]);
+  },
+};
+function u32(n: number): number[] {
+  return [(n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff];
+}
+
+describe("countRtcp (what the viewers' side reports back)", () => {
+  const fresh = () => ({ pli: 0, fir: 0, nack: 0, nack_pkts: 0, rr: 0, loss_pct: 0, lost: null as number | null, remb_kbps: null as number | null });
+
+  test("PLI, FIR, NACK (with the lost packets of its bitmask), RR loss and REMB, also inside a compound packet", () => {
+    const c = fresh();
+    countRtcp(Buffer.concat([rtcp.rr(1001, 64, 12), rtcp.pli(1001)]), c, 1001);
+    countRtcp(rtcp.fir(1001), c, 1001);
+    countRtcp(rtcp.nack(1001, 100, 0b101), c, 1001);
+    countRtcp(rtcp.remb(2_500_000), c, 1001);
+    expect(c).toEqual({ pli: 1, fir: 1, nack: 1, nack_pkts: 3, rr: 1, loss_pct: 25, lost: 12, remb_kbps: 2500 });
+  });
+
+  test("report blocks about another SSRC (the audio) do not count as video loss", () => {
+    const c = fresh();
+    countRtcp(rtcp.rr(1000, 255, 99), c, 1001);
+    expect(c).toMatchObject({ rr: 1, loss_pct: 0, lost: null });
+  });
+
+  test("garbage, RTP and truncated packets are ignored without throwing", () => {
+    const c = fresh();
+    countRtcp(Buffer.from([0x80, 101, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9]), c, 1001);
+    countRtcp(Buffer.from([0x81, 206, 0, 9]), c, 1001);
+    countRtcp(Buffer.alloc(0), c, 1001);
+    expect(c).toEqual(fresh());
+  });
+});
+
+describe("keyframeInfo (size of the keyframe the library hands to WebRTC)", () => {
+  const sc = [0, 0, 0, 1];
+  test("an IDR access unit: its bytes and the RTP packets it takes (1220-byte fragments, one per small NAL)", () => {
+    const au = Buffer.from([...sc, 0x67, ...new Array(37).fill(1), ...sc, 0x68, 1, 2, 3, 0, 0, 1, 0x65, ...new Array(36353).fill(7)]);
+    expect(keyframeInfo(au)).toEqual({ bytes: au.length, packets: 2 + Math.ceil(36353 / 1218) });
+  });
+
+  test("a P frame or something that is not Annex-B is not a keyframe", () => {
+    expect(keyframeInfo(Buffer.from([...sc, 0x41, 1, 2, 3]))).toBeNull();
+    expect(keyframeInfo(Buffer.from([1, 2, 3, 4]))).toBeNull();
+  });
+});
+
+describe("go live stats: keyframes, RTCP and what was negotiated", () => {
+  /** Track de video falso: guarda el onMessage como lo haría libdatachannel. */
+  function withTrack() {
+    const s = setup();
+    let deliver: ((m: Buffer) => void) | null = null;
+    (s.conn as any)._videoTrack = { onMessage: (fn: (m: Buffer) => void) => void (deliver = fn) };
+    (s.conn.mediaConnection as any).webRtcParams = { videoSsrc: 1001 };
+    (s.conn as any)._videoCodec = "H264";
+    s.stats.report(); // engancha el track
+    return { ...s, rtcpIn: (b: Buffer) => deliver!(b) };
+  }
+
+  test("RTCP received on the video track since the last line, and the last keyframe sent (bytes / ~packets)", () => {
+    const s = withTrack();
+    s.rtcpIn(rtcp.pli(1001));
+    s.rtcpIn(rtcp.nack(1001, 5, 0));
+    const idr = Buffer.from([0, 0, 0, 1, 0x65, ...new Array(3000).fill(7)]);
+    s.conn.sendVideoFrame(idr, 33);
+    s.conn.sendVideoFrame(Buffer.from([0, 0, 0, 1, 0x41, 1]), 33);
+    s.stats.report();
+    expect(s.last()).toMatchObject({ codec: "H264", kf: `${idr.length}/3`, kfs: 1, rtcp: { pli: 1, nack: 1, nack_pkts: 1, fir: 0 } });
+    s.stats.report();
+    expect(s.last()).toMatchObject({ kf: `${idr.length}/3`, kfs: 0, rtcp: { pli: 0, nack: 0 } });
+  });
+
+  test("without a video track to watch, rtcp is null (not zero: nothing was listening)", () => {
+    const s = setup();
+    s.stats.report();
+    expect(s.last()).toMatchObject({ rtcp: null, kf: null, neg: "-" });
+  });
+
+  test("recordNegotiated keeps what the op 4 said for this connection and still runs the library's handler", () => {
+    const media: any = { got: null, handleProtocolAck(d: unknown) { this.got = d; } };
+    recordNegotiated(media);
+    const d = { sdp: "x", video_codec: "H264", audio_codec: "opus", dave_protocol_version: 1 };
+    media.handleProtocolAck(d);
+    expect(media.got).toBe(d);
+    let t = 0;
+    const lines: any[] = [];
+    const stats = watchStream({ mediaConnection: media }, { log: { info: (_e, f) => void lines.push(f) }, now: () => t, intervalMs: 0 });
+    stats.report();
+    expect(JSON.parse(lines.at(-1).msg).neg).toBe("H264/opus/v1/?");
+    expect(() => recordNegotiated(null)).not.toThrow();
+    expect(() => recordNegotiated(Object.freeze({ handleProtocolAck() {} }))).not.toThrow();
   });
 });

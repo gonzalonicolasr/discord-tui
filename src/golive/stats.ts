@@ -23,6 +23,14 @@
  *   in / out     ops del WS del stream desde la línea anterior ({"6":2} = dos op 6; "b25" = binario op 25;
  *                "?" = un mensaje de texto que no empieza con su op)
  *   ws           cuántos WS del stream se vieron (más de 1 = la librería reconectó)
+ *   neg          lo negociado en el op 4: "códec video/códec audio/v<DAVE>/modo" ("-" si no se vio el op 4)
+ *   codec        el códec con el que la librería empaqueta el video
+ *   kf / kfs     último keyframe (IDR) entregado a WebRTC: "bytes/~paquetes RTP" (antes de DAVE); kfs = cuántos desde
+ *                la línea anterior (con un IDR cada 2 s, ~2-3 por línea)
+ *   rtcp         lo que entró por el track de video desde la línea anterior (null = no hay track que mirar):
+ *                pli / fir (pedidos de keyframe), nack / nack_pkts (pedidos de retransmisión y paquetes pedidos),
+ *                rr (reports), loss_pct (mayor pérdida reportada sobre nuestro video, %), lost (pérdida acumulada
+ *                reportada), remb_kbps (estimación de ancho de banda del server)
  */
 import type { Logger } from "../log/logger";
 
@@ -78,6 +86,116 @@ export function negotiatedOf(d: unknown): string {
   return `${safeValue(o.video_codec)}/${safeValue(o.audio_codec)}/v${dave}/${safeValue(o.mode)}`;
 }
 
+/** Lo negociado en el op 4 de cada conexión del stream (lo anota `recordNegotiated`). */
+const negotiatedBy = new WeakMap<object, string>();
+
+/**
+ * Envuelve `handleProtocolAck` de la StreamConnection de la librería para anotar lo negociado (`negotiatedOf`) antes de
+ * que la librería lo procese. Nunca tira ni cambia lo que hace la librería.
+ */
+export function recordNegotiated(media: any): void {
+  try {
+    const original = media?.handleProtocolAck;
+    if (typeof original !== "function") return;
+    media.handleProtocolAck = function (this: unknown, d: unknown) {
+      try {
+        negotiatedBy.set(media, negotiatedOf(d));
+      } catch {
+        // el diagnóstico nunca frena el op 4
+      }
+      return original.call(this, d);
+    };
+  } catch {
+    // conexión congelada: queda sin anotar
+  }
+}
+
+/** Contadores de RTCP que llega por el track de video (lo que reportan Discord y los que miran). */
+export interface RtcpCounts {
+  pli: number;
+  fir: number;
+  /** Mensajes NACK y paquetes que piden (pid + los bits de blp). */
+  nack: number;
+  nack_pkts: number;
+  /** Receiver/sender reports recibidos; loss_pct = mayor "fraction lost" (%) sobre NUESTRO video; lost = último acumulado. */
+  rr: number;
+  loss_pct: number;
+  lost: number | null;
+  /** Último REMB (estimación de ancho de banda del server) en kbps. */
+  remb_kbps: number | null;
+}
+
+/**
+ * Cuenta un paquete RTCP (compuesto o no): PLI y FIR (PSFB 206 FMT 1/4), NACK genérico (RTPFB 205 FMT 1), REMB (PSFB
+ * FMT 15) y los report blocks de RR/SR (201/200) sobre `videoSsrc`. Solo números; lo que no entiende lo saltea.
+ */
+export function countRtcp(buf: Uint8Array, into: RtcpCounts, videoSsrc: number | null): void {
+  const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  let off = 0;
+  while (off + 4 <= buf.length) {
+    if (buf[off]! >> 6 !== 2) return;
+    const fmt = buf[off]! & 0x1f;
+    const pt = buf[off + 1]!;
+    const size = (view.getUint16(off + 2) + 1) * 4;
+    if (off + size > buf.length) return;
+    if (pt === 206 && fmt === 1) into.pli++;
+    else if (pt === 206 && fmt === 4) into.fir++;
+    else if (pt === 206 && fmt === 15 && size >= 20 && view.getUint32(off + 12) === 0x52454d42) {
+      const exp = buf[off + 17]! >> 2;
+      const mantissa = ((buf[off + 17]! & 3) << 16) | (buf[off + 18]! << 8) | buf[off + 19]!;
+      into.remb_kbps = Math.round((mantissa * 2 ** exp) / 1000);
+    } else if (pt === 205 && fmt === 1) {
+      into.nack++;
+      for (let f = off + 12; f + 4 <= off + size; f += 4) {
+        let blp = view.getUint16(f + 2);
+        let lost = 1;
+        while (blp) {
+          lost += blp & 1;
+          blp >>= 1;
+        }
+        into.nack_pkts += lost;
+      }
+    } else if (pt === 201 || pt === 200) {
+      into.rr++;
+      const first = off + (pt === 200 ? 28 : 8);
+      for (let b = 0; b < fmt; b++) {
+        const at = first + b * 24;
+        if (at + 24 > off + size) break;
+        if (videoSsrc !== null && view.getUint32(at) !== videoSsrc >>> 0) continue;
+        into.loss_pct = Math.max(into.loss_pct, Math.round((buf[at + 4]! * 100) / 256));
+        into.lost = (buf[at + 5]! << 16) | (buf[at + 6]! << 8) | buf[at + 7]!;
+      }
+    }
+    off += size;
+  }
+}
+
+/** Tamaño de fragmento del H264RtpPacketizer de libdatachannel (payload RTP máximo medido: 1220 bytes). */
+const RTP_FRAGMENT = 1220;
+const START3 = Buffer.from([0, 0, 1]);
+
+/**
+ * Si el cuadro (Annex-B, como se lo pasa la librería a WebRTC, antes de DAVE) trae un IDR: sus bytes y los paquetes
+ * RTP que ocupa (aprox.: uno por NAL chico, FU-A de 1218 bytes de datos para los grandes). Si no, null.
+ */
+export function keyframeInfo(frame: Uint8Array): { bytes: number; packets: number } | null {
+  const b = Buffer.isBuffer(frame) ? frame : Buffer.from(frame.buffer, frame.byteOffset, frame.byteLength);
+  const starts: number[] = [];
+  for (let i = b.indexOf(START3); i !== -1; i = b.indexOf(START3, i + 3)) starts.push(i + 3);
+  let idr = false;
+  let packets = 0;
+  for (let k = 0; k < starts.length; k++) {
+    const start = starts[k]!;
+    let end = k + 1 < starts.length ? starts[k + 1]! - 3 : b.length;
+    if (k + 1 < starts.length && end > start && b[end - 1] === 0) end--; // start code de 4 bytes
+    const len = end - start;
+    if (len <= 0) continue;
+    if ((b[start]! & 0x1f) === 5) idr = true;
+    packets += len <= RTP_FRAGMENT ? 1 : Math.ceil((len - 1) / (RTP_FRAGMENT - 2));
+  }
+  return idr ? { bytes: b.length, packets } : null;
+}
+
 export function watchStream(
   conn: any,
   deps: { log: Pick<Logger, "info">; now?: () => number; intervalMs?: number },
@@ -88,6 +206,11 @@ export function watchStream(
   const audio: Track = { sent: 0, dropped: 0, mediaMs: 0, lastAt: null };
   let opsIn: Record<string, number> = {};
   let opsOut: Record<string, number> = {};
+  const freshRtcp = (): RtcpCounts => ({ pli: 0, fir: 0, nack: 0, nack_pkts: 0, rr: 0, loss_pct: 0, lost: null, remb_kbps: null });
+  let rtcp = freshRtcp();
+  let hookedTrack: any = null;
+  let lastKeyframe: { bytes: number; packets: number } | null = null;
+  let keyframes = 0;
   let stopped = false;
   let wsSeen = 0;
   let hooked: any = null;
@@ -133,6 +256,13 @@ export function watchStream(
       safe(() => {
         if (drops) track.dropped++;
         else {
+          if (name === "sendVideoFrame" && args[0] instanceof Uint8Array) {
+            const kf = keyframeInfo(args[0]);
+            if (kf) {
+              lastKeyframe = kf;
+              keyframes++;
+            }
+          }
           const frametime = Number(args[1]);
           track.sent++;
           track.mediaMs += Number.isFinite(frametime) ? frametime : 0;
@@ -170,10 +300,28 @@ export function watchStream(
     }
   };
 
+  /**
+   * Engancha el track de video (y el nuevo si la librería rearmó la PeerConnection): lo que entra por ahí es el RTCP
+   * de Discord (el emisor no recibe video). Solo se cuenta.
+   */
+  const hookTrack = (): void => {
+    const t = conn?._videoTrack;
+    if (!t || t === hookedTrack || typeof t.onMessage !== "function") return;
+    hookedTrack = t;
+    t.onMessage((m: Uint8Array) => {
+      safe(() => {
+        if (hookedTrack !== t) return;
+        const ssrc = conn?.mediaConnection?.webRtcParams?.videoSsrc;
+        countRtcp(m, rtcp, typeof ssrc === "number" ? ssrc : null);
+      });
+    });
+  };
+
   const idle = (t: Track, at: number): number | null => (t.lastAt === null ? null : Math.round(at - t.lastAt));
 
   const line = (state?: string): void => {
     hookWs();
+    hookTrack();
     const at = now();
     const vIdle = idle(video, at);
     const aIdle = idle(audio, at);
@@ -207,9 +355,16 @@ export function watchStream(
       in: opsIn,
       out: opsOut,
       ws: wsSeen,
+      neg: (media && typeof media === "object" && negotiatedBy.get(media)) || "-",
+      codec: typeof conn?._videoCodec === "string" ? conn._videoCodec : null,
+      kf: lastKeyframe ? `${lastKeyframe.bytes}/${lastKeyframe.packets}` : null,
+      kfs: keyframes,
+      rtcp: hookedTrack ? rtcp : null,
     };
     opsIn = {};
     opsOut = {};
+    keyframes = 0;
+    rtcp = { ...freshRtcp(), lost: rtcp.lost, remb_kbps: rtcp.remb_kbps };
     deps.log.info("golive.stats", { ...(state ? { state } : {}), msg: JSON.stringify(msg) });
   };
 
@@ -218,6 +373,7 @@ export function watchStream(
     wrap("sendVideoFrame", video);
     wrap("sendAudioFrame", audio);
     hookWs();
+    hookTrack();
   });
 
   const intervalMs = deps.intervalMs ?? STATS_INTERVAL_MS;
