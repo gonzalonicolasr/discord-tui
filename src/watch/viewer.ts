@@ -15,10 +15,15 @@ import { randomUUID } from "node:crypto";
 import { noResumeAfterStop } from "../golive/shim";
 import { negotiatedOf } from "../golive/stats";
 import { H264Depacketizer, RtpH264Stats, parseRtp } from "./h264";
+import { NackTracker, nackPacket } from "./nack";
 
 /** El payload type H264 que ofrece la librería (CodecPayloadType.H264). */
 export const H264_PT = 101;
 const DAVE_MAGIC = 0xfafa;
+/** Cuánto espera un cuadro incompleto sus reenvíos (NACK/RTX) antes de tirarlo y pedir un keyframe. */
+export const FRAME_WAIT_MS = 450;
+/** Cada cuánto se revisan los NACK pendientes y los cuadros que ya esperaron demasiado. */
+const NACK_TICK_MS = 40;
 
 export interface ViewerParams {
   guildId: string | null;
@@ -143,7 +148,7 @@ export function streamerSsrcs(d: any, streamerId: string, meId: string): { audio
 export function createViewerConnection(lib: ViewerLib, p: ViewerParams, events: ViewerEvents): ViewerConnection {
   const { PeerConnection, Audio, Video, RtcpReceivingSession } = lib.nodeDataChannel;
   const stats = { packets: 0, frames: 0, dropped: 0, daveFailures: 0 };
-  const diag = { ops: new Set<number>(), op12: 0, rtpVideo: 0, rtpOther: 0, rtpOtherSsrc: new Set<number>(), passthroughDrop: 0, notReadyDrop: 0, encrypted: 0, clear: 0, lastPt: -1, pli: 0, pliOk: 0, pliOwn: 0, wants: 0 };
+  const diag = { ops: new Set<number>(), op12: 0, rtpVideo: 0, rtpOther: 0, rtpOtherSsrc: new Set<number>(), passthroughDrop: 0, notReadyDrop: 0, encrypted: 0, clear: 0, lastPt: -1, pli: 0, pliOk: 0, pliOwn: 0, wants: 0, nackPkts: 0, nackSent: 0, recovered: 0, late: 0 };
   let ownSsrc = 0;
   /** Lo que llega por RTP del video que miramos (histograma de NAL, tamaños, saltos) y payload types vistos. */
   const rx = new RtpH264Stats();
@@ -158,15 +163,37 @@ export function createViewerConnection(lib: ViewerLib, p: ViewerParams, events: 
   let stopped = false;
   let conn: any;
 
-  const depack = new H264Depacketizer(() => keyframe());
+  const depack = new H264Depacketizer(() => keyframe(), FRAME_WAIT_MS);
+  /** Faltantes del video que miramos: se piden con NACK (RFC 4585) por el mismo camino que el PLI propio. */
+  const nack = new NackTracker();
+  const nackTimer = setInterval(() => {
+    if (stopped) return;
+    sendNacks();
+    deliver(depack.tick());
+  }, NACK_TICK_MS);
+  (nackTimer as { unref?: () => void }).unref?.();
+  function sendNacks(): void {
+    const seqs = nack.due();
+    if (!seqs.length || !ownSsrc || !ssrcs.video) return;
+    try {
+      // Con el track cerrado libdatachannel aborta el proceso (ver keyframe()).
+      if (videoTrack?.isOpen() && videoTrack.sendMessageBinary(nackPacket(ownSsrc, ssrcs.video, seqs))) {
+        diag.nackPkts++;
+        diag.nackSent += seqs.length;
+      }
+    } catch {
+      // track cerrado
+    }
+  }
   function keyframe(): void {
     try {
       // Con el track cerrado libdatachannel tira std::runtime_error desde su hilo y aborta el proceso entero.
       if (videoTrack?.isOpen()) {
         diag.pli++;
         if (videoTrack.requestKeyframe()) diag.pliOk++;
-        // El PLI de libdatachannel sale con el SSRC del que transmite también como remitente; el SFU puede
-        // descartarlo. Va otro con nuestro SSRC (op 2) como remitente. [sin verificar cuál de los dos sirve]
+        // requestKeyframe() de libdatachannel manda un FIR (PT 206 FMT 4), no un PLI, y con el SSRC del que transmite
+        // como remitente; el SFU puede descartarlo. Va además un PLI con nuestro SSRC (op 2) como remitente.
+        // [sin verificar cuál de los dos sirve]
         if (ownSsrc && ssrcs.video && videoTrack.sendMessageBinary(pliPacket(ownSsrc, ssrcs.video))) diag.pliOwn++;
       }
     } catch {
@@ -215,6 +242,7 @@ export function createViewerConnection(lib: ViewerLib, p: ViewerParams, events: 
     pc.setRemoteDescription(viewerRemoteSdp(remote, ssrcs), "answer");
   }
 
+  let keyframesSeen = 0;
   function onRtp(msg: Buffer): void {
     if (stopped) return;
     const pkt = parseRtp(msg);
@@ -222,17 +250,29 @@ export function createViewerConnection(lib: ViewerLib, p: ViewerParams, events: 
     stats.packets++;
     diag.lastPt = pkt.payloadType;
     if (pts.size < 8 || pts.has(pkt.payloadType)) pts.set(pkt.payloadType, (pts.get(pkt.payloadType) ?? 0) + 1);
-    if (pkt.payloadType !== H264_PT) return; // RTX y demás: sin NACK no sirven
+    // RTX (RFC 4588, PT 102 del SSRC rtx del op 12): libdatachannel ya lo desenvuelve y lo entrega acá como el
+    // paquete original (PT 101, SSRC del video, su número de secuencia); un PT 102 crudo no llega nunca
+    // (tests/watch/viewer-nack.test.ts). Igual que un reenvío con el mismo SSRC y secuencia.
+    if (pkt.payloadType !== H264_PT) return;
     if (ssrcs.video && pkt.ssrc !== ssrcs.video) {
       diag.rtpOther++;
       if (diag.rtpOtherSsrc.size < 4) diag.rtpOtherSsrc.add(pkt.ssrc);
       return;
     }
     diag.rtpVideo++;
-    rx.observe(pkt);
-    const keyframesBefore = depack.keyframes;
-    const aus = depack.push(pkt);
-    if (depack.keyframes !== keyframesBefore) lastKeyframeAt = Date.now();
+    // El tracker sabe si este número faltaba: llegó después de pedirlo (recuperado por el NACK) o desordenado antes.
+    const filled = nack.received(pkt.sequence);
+    if (filled === "resent") diag.recovered++;
+    else if (filled === "late") diag.late++;
+    else rx.observe(pkt); // los que tapan un hueco no cuentan como saltos de secuencia en rx/win
+    deliver(depack.push(pkt, filled === "resent"));
+  }
+
+  function deliver(aus: Uint8Array[]): void {
+    if (depack.keyframes !== keyframesSeen) {
+      keyframesSeen = depack.keyframes;
+      lastKeyframeAt = Date.now();
+    }
     for (const au of aus) {
       const plain = decrypt(au);
       if (!plain) continue;
@@ -380,9 +420,23 @@ export function createViewerConnection(lib: ViewerLib, p: ViewerParams, events: 
         encrypted: diag.encrypted,
         daveFail: stats.daveFailures,
         drop: `${diag.notReadyDrop}/${diag.passthroughDrop}/${stats.dropped}`,
+        // Si Discord atiende el NACK: nackPkts paquetes NACK, nackSent números pedidos, recovered los que llegaron
+        // DESPUÉS de pedirlos (RTX ya desenvuelto o reenvío), late los que llegaron desordenados antes de pedirlos,
+        // saved cuadros completados gracias a un recuperado. recovered = 0 con nackSent > 0 → no lo atiende.
+        nackPkts: diag.nackPkts,
+        nackSent: diag.nackSent,
+        recovered: diag.recovered,
+        late: diag.late,
+        saved: depack.recovered,
+        // Cuadros tirados: n, paquetes que tenían / que faltaban, en cuántos faltaba principio/medio/final y cuántos
+        // de los que faltaban llegaron después de tirarlos.
+        lost: depack.lost,
         idr: depack.keyframes,
         conceal: depack.concealed,
-        pli: `${diag.pliOk}/${diag.pli}/${diag.pliOwn}`,
+        // pedidos de keyframe; de cada uno sale el FIR de libdatachannel (requestKeyframe) y nuestro PLI
+        kfReq: diag.pli,
+        fir: diag.pliOk,
+        pli: diag.pliOwn,
         wants: diag.wants,
         neg: negotiated,
         pt: [...pts.entries()].sort((a, b) => a[0] - b[0]).map(([k, v]) => `${k}:${v}`).join(","),
@@ -393,6 +447,7 @@ export function createViewerConnection(lib: ViewerLib, p: ViewerParams, events: 
     stop() {
       if (stopped) return;
       stopped = true;
+      clearInterval(nackTimer);
       try {
         conn.stop();
       } catch {

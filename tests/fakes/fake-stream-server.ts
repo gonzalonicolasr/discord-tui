@@ -23,6 +23,8 @@ export interface FakeStreamServer {
   sendOp(op: number, d: unknown): void;
   /** Manda un paquete (RTCP: PLI, NACK, RR…) al que transmite por su track de video. false si todavía no hay track. */
   sendToStreamer(buf: Uint8Array): boolean;
+  /** Manda un paquete (p. ej. un RTX) a los que miran por su track de video; cuántos lo aceptaron. */
+  sendToViewers(buf: Uint8Array): number;
   stop(): void;
 }
 
@@ -33,7 +35,7 @@ export interface FakeStreamServer {
  * del op 4 (1 por defecto; 0 = sin E2EE).
  */
 export function startFakeStreamServer(
-  opts: { relay?: boolean; dave?: number; streamerId?: string; /** video_codec del op 4 (H264 por defecto). */ videoCodec?: string; /** Cada paquete de video que llega del que transmite (con la hora). */ onStreamerPacket?: (msg: Buffer, at: number) => void; /** Cada paquete que llega por el track de video de uno que mira (su RTCP). */ onViewerPacket?: (msg: Buffer) => void } = {},
+  opts: { relay?: boolean; dave?: number; streamerId?: string; /** video_codec del op 4 (H264 por defecto). */ videoCodec?: string; /** Cada paquete de video que llega del que transmite (con la hora). */ onStreamerPacket?: (msg: Buffer, at: number) => void; /** Cada paquete que llega por el track de video de uno que mira (su RTCP). */ onViewerPacket?: (msg: Buffer) => void; /** false = el relay no le reenvía ese paquete del que transmite a los que miran (pérdida a propósito). */ relayFilter?: (msg: Buffer) => boolean } = {},
 ): FakeStreamServer {
   const dir = mkdtempSync(join(tmpdir(), "golive-tls-"));
   Bun.spawnSync(
@@ -126,6 +128,7 @@ export function startFakeStreamServer(
               t.onMessage((msg: Buffer) => {
                 if (!me.streaming) return void opts.onViewerPacket?.(msg);
                 opts.onStreamerPacket?.(msg, performance.now());
+                if (opts.relayFilter && !opts.relayFilter(msg)) return;
                 for (const c of conns.values()) {
                   if (c === me || !c.videoTrack?.isOpen()) continue;
                   try {
@@ -167,6 +170,18 @@ export function startFakeStreamServer(
       const streamer = [...conns.values()].find((c) => c.streaming);
       if (!streamer?.videoTrack?.isOpen()) return false;
       return streamer.videoTrack.sendMessageBinary(Buffer.from(buf));
+    },
+    sendToViewers(buf) {
+      let sent = 0;
+      for (const c of conns.values()) {
+        if (c.streaming || !c.videoTrack?.isOpen()) continue;
+        try {
+          if (c.videoTrack.sendMessageBinary(Buffer.from(buf))) sent++;
+        } catch {
+          // el que mira se fue
+        }
+      }
+      return sent;
     },
     ops,
     closeWith(code) {
