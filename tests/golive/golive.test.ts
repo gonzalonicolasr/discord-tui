@@ -17,7 +17,7 @@ function textProc(text: string): ProcLike {
   return { pid: 1, stdout: new Response(text).body!, exited: Promise.resolve(0), kill() {} };
 }
 
-function setup(opts: { tools?: string[]; monitors?: unknown[]; inVoice?: boolean; session?: boolean; pwDumpExit?: number; failWithAudio?: boolean; audioReady?: Promise<boolean> | boolean } = {}) {
+function setup(opts: { tools?: string[]; monitors?: unknown[]; inVoice?: boolean; session?: boolean; pwDumpExit?: number; failWithAudio?: boolean; audioReady?: Promise<boolean> | boolean; desktopAudio?: boolean } = {}) {
   const store = createStore(emptyState());
   store.dispatch({
     type: "gw",
@@ -41,7 +41,7 @@ function setup(opts: { tools?: string[]; monitors?: unknown[]; inVoice?: boolean
       return textProc(JSON.stringify(opts.monitors ?? [{ name: "DP-1", width: 1920, height: 1080, focused: false }, { name: "HDMI-A-1", width: 1920, height: 1080, focused: true }]));
     },
   };
-  const golive = createGoLive({ store, gateway: gw, loadLib: async () => fake.lib, env, startCapture: capture.start, pickEncoder: async () => "nvenc", createTimeoutMs: 200 });
+  const golive = createGoLive({ store, gateway: gw, loadLib: async () => fake.lib, env, startCapture: capture.start, pickEncoder: async () => "nvenc", createTimeoutMs: 200, desktopAudio: opts.desktopAudio ?? true });
   if (opts.inVoice !== false) {
     if (opts.session !== false) gw.dispatch("VOICE_STATE_UPDATE", { guild_id: GUILD, user_id: ME, channel_id: VOICE_A, session_id: "voice-session-1" });
     store.dispatch({ type: "voice/joining", guildId: GUILD, channelId: VOICE_A });
@@ -139,6 +139,18 @@ describe("start", () => {
 
 describe("PC audio", () => {
   const PIPEWIRE = ["wf-recorder", "grim", "hyprctl", "pw-record", "pw-link", "pw-dump"];
+
+  test("off by default (Discord drops a stream with audio after 30 s): video only, no probe, no notice", async () => {
+    const s = setup({ tools: PIPEWIRE, desktopAudio: false });
+    await s.golive.start("DP-1");
+    expect(s.capture.started).toHaveLength(1);
+    expect(s.capture.started[0]).toMatchObject({ backend: "wf-recorder", audio: false });
+    expect(s.spawned).not.toContainEqual(["pw-dump"]);
+    expect(s.notices().some((t) => t.includes("audio"))).toBe(false);
+    await s.fake.ready();
+    expect(s.stream()).toMatchObject({ status: "live", desktopAudio: false });
+    await s.golive.stop();
+  });
 
   test("with PipeWire the capture carries the PC audio, and no warning is shown", async () => {
     const s = setup({ tools: PIPEWIRE });

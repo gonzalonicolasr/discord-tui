@@ -231,7 +231,7 @@ de esta máquina a `/dev/null`; el primer stream real es el 🧍 Paso de Gon (`d
 
 **Qué hace:** botón `📺 transmitir` en la barra de voz o `S` → si hay más de un monitor y no hay uno guardado en settings que siga
 conectado, un picker → `⏳ iniciando…` → `🔴 EN VIVO · detener` (+ `👁 N` espectadores). Una transmisión a la vez, video + el
-audio de la PC sin el de zcord (ver "Audio de la PC" abajo; con grim o sin PipeWire, solo video), 720p30 por defecto (1080p30 en settings, puede necesitar Nitro **[sin verificar]**).
+audio de la PC sin el de zcord (APAGADO por defecto desde el 2026-11-16: con audio Discord corta el stream a los 30 s con 4006; `ZCORD_GOLIVE_AUDIO=1` lo prende para probar; ver "Audio de la PC" abajo; con grim o sin PipeWire, solo video), 720p30 por defecto (1080p30 en settings, puede necesitar Nitro **[sin verificar]**).
 
 **Audio de la PC** (`src/golive/desktop-audio.ts`, 2026-11-15): un `pw-record --target 0` propio (nodo `zcord-golive-audio`,
 `node.always-process` para que mande silencio aunque no suene nada) escribe PCM s16 48 kHz estéreo directo en el fd 3 de ffmpeg,

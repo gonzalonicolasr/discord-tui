@@ -62,12 +62,19 @@ export function createGoLive(deps: {
   startCapture?: typeof startCaptureDefault;
   pickEncoder?: (env: CaptureEnv) => Promise<"nvenc" | "vaapi" | "x264">;
   createTimeoutMs?: number;
+  /**
+   * Mandar el audio de la PC con la transmisión. Apagado salvo `ZCORD_GOLIVE_AUDIO=1`: con audio, Discord cierra
+   * el stream a los 30 s (4006, "la sesión de la transmisión ya no es válida"; visto el 2026-11-16 en todas las
+   * transmisiones). Sin esto la transmisión es solo video, como antes de que existiera el audio.
+   */
+  desktopAudio?: boolean;
 }): GoLive {
   const { store, gateway } = deps;
   const env = deps.env ?? defaultCaptureEnv;
   const startCapture = deps.startCapture ?? startCaptureDefault;
   const pickEncoder = deps.pickEncoder ?? ((e: CaptureEnv) => pickEncoderDefault(e));
   const loadLib = deps.loadLib ?? loadGoLiveLib;
+  const desktopAudio = deps.desktopAudio ?? process.env.ZCORD_GOLIVE_AUDIO === "1";
   let lib: GoLiveLib | null = null;
   let active: Active | null = null;
   let stopping: Promise<void> = Promise.resolve();
@@ -191,10 +198,12 @@ export function createGoLive(deps: {
     const encoder = await pickEncoder(env).catch(() => "x264" as const);
     if (active !== a) return;
     // El audio de la PC solo con wf-recorder: grim va a ~10 fps irregulares y ffmpeg frenaría el audio.
-    let audio = backend === "wf-recorder" && (await probeDesktopAudio(env).catch(() => false));
+    let audio = desktopAudio && backend === "wf-recorder" && (await probeDesktopAudio(env).catch(() => false));
     if (active !== a) return;
-    if (backend === "grim") videoOnly(STREAM_ERRORS.noDesktopAudioGrim, "grim");
-    else if (!audio) videoOnly(STREAM_ERRORS.noDesktopAudio, "no-pipewire");
+    if (desktopAudio) {
+      if (backend === "grim") videoOnly(STREAM_ERRORS.noDesktopAudioGrim, "grim");
+      else if (!audio) videoOnly(STREAM_ERRORS.noDesktopAudio, "no-pipewire");
+    }
 
     const shim = createGoLiveShim({ gateway, meId: me, lib });
     a.shim = shim;
