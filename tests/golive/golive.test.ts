@@ -337,6 +337,21 @@ describe("stop", () => {
     expect(s.capture.stops()).toBe(0);
   });
 
+  test("Discord picks another video codec than the H264 we send: visible error and an error line in the log", async () => {
+    const s = setup();
+    await s.golive.start("DP-1");
+    await s.fake.ready("AV1");
+    expect(s.notices()).toContain(STREAM_ERRORS.codecMismatch("AV1"));
+    expect(s.stream().status).toBe("live"); // no se corta: el aviso dice por qué no lo ven
+  });
+
+  test("H264 from Discord: no codec notice", async () => {
+    const s = setup();
+    await s.golive.start("DP-1");
+    await s.fake.ready("H264");
+    expect(s.notices().some((t) => t.includes("códec"))).toBe(false);
+  });
+
   test("the stream diagnostics start once the stream is ready and end with the reason (WS close code first)", async () => {
     const s = setup();
     await s.golive.start("DP-1");

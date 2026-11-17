@@ -95,6 +95,12 @@ describe("shim over our gateway with our voice session", () => {
     expect(conn.mediaConnection.daveChannelId).toBe((BigInt(RTC_SERVER_ID) - 1n).toString());
   });
 
+  test("the op 1 offers a single video codec, H264, plus opus: the server cannot pick one we do not send", () => {
+    const select = server.ops.find((o) => o.op === 1)?.d;
+    expect(select.codecs.map((c: any) => `${c.type}:${c.name}`).sort()).toEqual(["audio:opus", "video:H264"]);
+    expect(select.codecs.find((c: any) => c.name === "H264")).toMatchObject({ payload_type: 101, rtx_payload_type: 102, encode: true });
+  });
+
   test("destroy sends op 19 STREAM_DELETE once and stops listening to the gateway", () => {
     const before = gw.listenerCount("dispatch");
     shim.destroy();
@@ -112,4 +118,36 @@ test("the shim blocks any op other than 18/19/22", () => {
   expect(gw.sent).toEqual([]);
   expect(shim.blocked).toEqual([4]);
   shim.destroy();
+});
+
+describe("the server picks another video codec (op 4 or op 14)", () => {
+  const gw = fakeGateway();
+  let other: FakeStreamServer;
+  let shim: ReturnType<typeof createGoLiveShim>;
+  const codecs: Array<{ codec: string; op: number }> = [];
+
+  beforeAll(async () => {
+    other = startFakeStreamServer({ videoCodec: "H265" });
+    shim = createGoLiveShim({ gateway: gw, meId: ME, lib, onCodec: (codec, op) => void codecs.push({ codec, op }) });
+    shim.attachVoice(GUILD, CHANNEL, OUR_SESSION);
+    const ready = shim.streamer.createStream();
+    gw.dispatch("STREAM_CREATE", { stream_key: KEY, rtc_server_id: RTC_SERVER_ID, viewer_ids: [], paused: false });
+    gw.dispatch("STREAM_SERVER_UPDATE", { stream_key: KEY, endpoint: other.endpoint, token: "stream-token-falso" });
+    await Promise.race([ready, Bun.sleep(5000)]);
+    other.sendOp(14, { video_codec: "AV1", audio_codec: "opus", secret_key: [1, 2, 3], media_session_id: "x" });
+    other.sendOp(14, { audio_codec: "opus" }); // sin video_codec: no avisa nada
+    await Bun.sleep(300);
+  });
+
+  afterAll(() => {
+    shim.destroy();
+    other.stop();
+  });
+
+  test("the shim reports the op 4 codec and every op 14 video codec, and nothing else of those messages", () => {
+    expect(codecs).toEqual([
+      { codec: "H265", op: 4 },
+      { codec: "AV1", op: 14 },
+    ]);
+  });
 });

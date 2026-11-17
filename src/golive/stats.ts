@@ -24,6 +24,7 @@
  *                "?" = un mensaje de texto que no empieza con su op)
  *   ws           cuántos WS del stream se vieron (más de 1 = la librería reconectó)
  *   neg          lo negociado en el op 4: "códec video/códec audio/v<DAVE>/modo" ("-" si no se vio el op 4)
+ *   upd / upd_n  último op 14 SESSION_UPDATE con códecs ("video/audio"; null si no hubo) y cuántos llegaron
  *   codec        el códec con el que la librería empaqueta el video
  *   kf / kfs     último keyframe (IDR) entregado a WebRTC: "bytes/~paquetes RTP" (antes de DAVE); kfs = cuántos desde
  *                la línea anterior (con un IDR cada 2 s, ~2-3 por línea)
@@ -86,24 +87,72 @@ export function negotiatedOf(d: unknown): string {
   return `${safeValue(o.video_codec)}/${safeValue(o.audio_codec)}/v${dave}/${safeValue(o.mode)}`;
 }
 
-/** Lo negociado en el op 4 de cada conexión del stream (lo anota `recordNegotiated`). */
-const negotiatedBy = new WeakMap<object, string>();
+/** Lo negociado en el op 4 de cada conexión del stream y lo que cambiaron los op 14 (lo anota `recordNegotiated`). */
+interface Negotiation {
+  op4: string;
+  /** Último op 14 SESSION_UPDATE con códecs: "video/audio". */
+  op14: string | null;
+  op14s: number;
+}
+const negotiations = new WeakMap<object, Negotiation>();
+
+/** Solo esos campos de un mensaje del WS (que puede traer claves): nunca se parsea entero. */
+const VIDEO_CODEC = /"video_codec"\s*:\s*"([A-Za-z0-9_.-]{1,16})"/;
+const AUDIO_CODEC = /"audio_codec"\s*:\s*"([A-Za-z0-9_.-]{1,16})"/;
+
+/** El códec que eligió el servidor (op 4 o un op 14) para avisar si no es el que mandamos. */
+export type CodecListener = (videoCodec: string, op: 4 | 14) => void;
 
 /**
- * Envuelve `handleProtocolAck` de la StreamConnection de la librería para anotar lo negociado (`negotiatedOf`) antes de
- * que la librería lo procese. Nunca tira ni cambia lo que hace la librería.
+ * Envuelve la StreamConnection de la librería para anotar lo negociado: `handleProtocolAck` (op 4, ya parseado por la
+ * librería: se leen solo cuatro campos, `negotiatedOf`) y los op 14 SESSION_UPDATE del WS (la librería los ignora;
+ * se sacan solo `video_codec` y `audio_codec` del texto con una expresión regular). `onCodec` recibe cada códec de
+ * video que diga el servidor. Nunca tira ni cambia lo que hace la librería.
  */
-export function recordNegotiated(media: any): void {
+export function recordNegotiated(media: any, onCodec?: CodecListener): void {
+  const tell = (codec: unknown, op: 4 | 14): void => {
+    try {
+      if (typeof codec === "string" && SAFE_VALUE.test(codec)) onCodec?.(codec, op);
+    } catch {
+      // quien escucha falló: el op igual sigue
+    }
+  };
   try {
-    const original = media?.handleProtocolAck;
-    if (typeof original !== "function") return;
+    const ack = media?.handleProtocolAck;
+    if (typeof ack !== "function") return;
     media.handleProtocolAck = function (this: unknown, d: unknown) {
       try {
-        negotiatedBy.set(media, negotiatedOf(d));
+        const prev = negotiations.get(media);
+        negotiations.set(media, { op4: negotiatedOf(d), op14: prev?.op14 ?? null, op14s: prev?.op14s ?? 0 });
+        tell((d as { video_codec?: unknown } | null)?.video_codec, 4);
       } catch {
         // el diagnóstico nunca frena el op 4
       }
-      return original.call(this, d);
+      return ack.call(this, d);
+    };
+    const setupEvents = media.setupEvents;
+    if (typeof setupEvents !== "function") return;
+    // Cada WS nuevo (también al reanudar) pasa por setupEvents: ahí se le agrega un oyente más.
+    media.setupEvents = function (this: unknown, ...args: unknown[]) {
+      const result = setupEvents.apply(this, args);
+      try {
+        media.ws?.addEventListener?.("message", (e: { data: unknown }) => {
+          try {
+            if (typeof e?.data !== "string" || LEADING_OP.exec(e.data)?.[1] !== "14") return;
+            const video = VIDEO_CODEC.exec(e.data)?.[1];
+            const audio = AUDIO_CODEC.exec(e.data)?.[1];
+            if (!video && !audio) return;
+            const n = negotiations.get(media) ?? { op4: "-", op14: null, op14s: 0 };
+            negotiations.set(media, { ...n, op14: `${video ?? "?"}/${audio ?? "?"}`, op14s: n.op14s + 1 });
+            if (video) tell(video, 14);
+          } catch {
+            // un mensaje raro no corta nada
+          }
+        });
+      } catch {
+        // sin WS todavía
+      }
+      return result;
     };
   } catch {
     // conexión congelada: queda sin anotar
@@ -338,6 +387,7 @@ export function watchStream(
     }
     const media = conn?.mediaConnection;
     const daveV = media?._daveProtocolVersion;
+    const negotiation = media && typeof media === "object" ? negotiations.get(media) : undefined;
     const msg = {
       s: Math.round((at - start) / 1000),
       v: video.sent,
@@ -355,7 +405,9 @@ export function watchStream(
       in: opsIn,
       out: opsOut,
       ws: wsSeen,
-      neg: (media && typeof media === "object" && negotiatedBy.get(media)) || "-",
+      neg: negotiation?.op4 ?? "-",
+      upd: negotiation?.op14 ?? null,
+      upd_n: negotiation?.op14s ?? 0,
       codec: typeof conn?._videoCodec === "string" ? conn._videoCodec : null,
       kf: lastKeyframe ? `${lastKeyframe.bytes}/${lastKeyframe.packets}` : null,
       kfs: keyframes,

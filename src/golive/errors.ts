@@ -14,6 +14,8 @@ export const STREAM_ERRORS = {
   newSession: "Discord abrió una sesión nueva: se cortó la transmisión",
   noDesktopAudio: "transmitiendo sin el audio de la PC (no pude capturarlo con PipeWire: hacen falta pw-record, pw-link y pw-dump)",
   noDesktopAudioGrim: "con grim la transmisión va sin el audio de la PC",
+  /** El servidor eligió para nuestro stream otro códec de video que el H264 que mandamos (op 4 / op 14). */
+  codecMismatch: (codec: string) => `Discord pidió el video en ${codec.slice(0, 16)} y zcord manda H264: los que miran no lo van a poder ver`,
 } as const;
 
 /** Aviso para el camino lento (grim en loop, ~10 fps). */

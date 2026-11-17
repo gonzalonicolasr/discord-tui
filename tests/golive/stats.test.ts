@@ -470,3 +470,21 @@ describe("go live stats: keyframes, RTCP and what was negotiated", () => {
     expect(() => recordNegotiated(Object.freeze({ handleProtocolAck() {} }))).not.toThrow();
   });
 });
+
+describe("golive.stats shows the op 4 and the op 14 codecs", () => {
+  test("neg is the op 4; upd / upd_n are the last op 14 video/audio codec and how many op 14 came", () => {
+    const ws = fakeWs();
+    const media: any = { ws, handleProtocolAck() {}, setupEvents() {} };
+    recordNegotiated(media);
+    media.handleProtocolAck({ video_codec: "H264", audio_codec: "opus", dave_protocol_version: 1 });
+    media.setupEvents();
+    ws.receive(JSON.stringify({ op: 14, d: { video_codec: "H265", audio_codec: "opus", secret_key: [9, 9] } }));
+    ws.receive(JSON.stringify({ op: 5, d: { video_codec: "VP8" } })); // no es un op 14: no cuenta
+    const lines: any[] = [];
+    const stats = watchStream({ mediaConnection: media }, { log: { info: (_e, f) => void lines.push(f) }, now: () => 0, intervalMs: 0 });
+    stats.report();
+    const msg = JSON.parse(lines.at(-1).msg);
+    expect(msg).toMatchObject({ neg: "H264/opus/v1/?", upd: "H265/opus", upd_n: 1 });
+    expect(lines.at(-1).msg).not.toContain("secret_key");
+  });
+});

@@ -18,9 +18,13 @@
  *   - su oferta declara el SSRC de video que asignó Discord (op 2) con `a=ssrc:`. Con dos m-lines (audio + video) y
  *     sin `a=ssrc` local, libdatachannel no sabe a qué track va el RTCP que manda Discord (PLI, NACK, reports) y lo
  *     tira: el RtcpNackResponder de la librería nunca veía un NACK (medido en loopback: 0 de 4 contra 4 de 4).
- *   - se anota lo negociado en el op 4 para golive.stats (stats.ts, `recordNegotiated`).
+ *   - se anota lo negociado en el op 4 y en los op 14 para golive.stats (stats.ts, `recordNegotiated`) y se avisa
+ *     (`onCodec`) qué códec de video eligió el servidor.
+ *   - el op 1 SELECT_PROTOCOL ofrece solo H264 + opus (`onlyH264`): la librería ofrece H264, H265, VP8, VP9 y AV1 con la
+ *     misma prioridad, el servidor elige el códec de cada emisor, y ella siempre manda lo que sale de ffmpeg (H264)
+ *     sin mirar el `video_codec` del op 4. Si el servidor eligiera otro, los que miran no podrían decodificar.
  */
-import { recordNegotiated } from "./stats";
+import { recordNegotiated, type CodecListener } from "./stats";
 
 
 /** Lo que usamos de la librería; se carga a pedido (importarla arrastra node-av y sharp). */
@@ -65,7 +69,7 @@ export interface GoLiveShim {
   destroy(): void;
 }
 
-export function createGoLiveShim(deps: { gateway: ShimGateway; meId: string; lib: GoLiveLib }): GoLiveShim {
+export function createGoLiveShim(deps: { gateway: ShimGateway; meId: string; lib: GoLiveLib; onCodec?: CodecListener }): GoLiveShim {
   const rawListeners = new Set<(p: { t: string; d: unknown }) => void>();
   const off = deps.gateway.on("dispatch", (t, d) => {
     if (!t.startsWith("STREAM_")) return; // la librería no ve nada más del gateway
@@ -101,7 +105,8 @@ export function createGoLiveShim(deps: { gateway: ShimGateway; meId: string; lib
     const media = streamer.voiceConnection?.streamConnection;
     if (media) {
       declareVideoSsrc(media);
-      recordNegotiated(media);
+      onlyH264(media);
+      recordNegotiated(media, deps.onCodec);
     }
     return created;
   };
@@ -150,5 +155,29 @@ export function declareVideoSsrc(media: any): void {
       // sin a=ssrc: igual que antes
     }
     return initWebRtc.apply(this, args);
+  };
+}
+
+/** Los códecs que puede elegir el servidor para nuestro stream: el video sale de ffmpeg en H264. */
+const OFFERED = new Set(["video:H264", "audio:opus"]);
+
+/**
+ * Deja en el `codecs` del op 1 SELECT_PROTOCOL que manda la librería solo H264 (video) y opus (audio). El resto del op
+ * (SDP incluida) pasa igual. Si la lista no tiene la forma esperada, sale como estaba.
+ */
+export function onlyH264(media: any): void {
+  const sendOpcode = media?.sendOpcode;
+  if (typeof sendOpcode !== "function") return;
+  media.sendOpcode = function (this: unknown, code: unknown, data: any) {
+    let d = data;
+    try {
+      if (code === 1 && Array.isArray(data?.codecs)) {
+        const codecs = data.codecs.filter((c: any) => OFFERED.has(`${c?.type}:${c?.name}`));
+        if (codecs.some((c: any) => c.name === "H264")) d = { ...data, codecs };
+      }
+    } catch {
+      d = data;
+    }
+    return sendOpcode.call(this, code, d);
   };
 }

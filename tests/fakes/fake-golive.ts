@@ -10,7 +10,7 @@ import type { GoLiveLib } from "../../src/golive/shim";
 export function fakeGoLiveLib() {
   const streamers: any[] = [];
   /** Resuelve el createStream pendiente (como el select_protocol_ack). */
-  let pendingCreate: Array<() => void> = [];
+  let pendingCreate: Array<(videoCodec: string) => void> = [];
   const wsListeners: Array<(e: { code: number }) => void> = [];
 
   class Streamer {
@@ -29,10 +29,14 @@ export function fakeGoLiveLib() {
       this.created = true;
       this.client.ws.broadcast({ op: 18, d: { type: "guild", guild_id: vc.guildId, channel_id: vc.channelId, preferred_region: null } });
       this.client.ws.broadcast({ op: 22, d: { stream_key: key, paused: false } });
+      // Como la real: la StreamConnection existe desde createStream() y el op 4 pasa por su handleProtocolAck.
+      const media: any = { handleProtocolAck(_d: unknown) {}, ws: { addEventListener: (_ev: string, fn: (e: { code: number }) => void) => wsListeners.push(fn) } };
+      vc.streamConnection = media;
       return new Promise((resolve) => {
-        pendingCreate.push(() =>
-          resolve({ mediaConnection: { ws: { addEventListener: (_ev: string, fn: (e: { code: number }) => void) => wsListeners.push(fn) } } }),
-        );
+        pendingCreate.push((videoCodec) => {
+          media.handleProtocolAck({ video_codec: videoCodec, audio_codec: "opus", dave_protocol_version: 1 });
+          resolve({ mediaConnection: media });
+        });
       });
     }
     stopStream(): void {
@@ -45,6 +49,7 @@ export function fakeGoLiveLib() {
 
   class VoiceConnection {
     session_id: string | null = null;
+    streamConnection: unknown;
     constructor(_s: unknown, public guildId: string | null, public botId: string, public channelId: string) {}
   }
 
@@ -67,11 +72,11 @@ export function fakeGoLiveLib() {
     lib,
     streamers,
     plays,
-    /** Discord contestó: el WS del stream quedó listo. */
-    ready: async () => {
+    /** Discord contestó (op 4 con ese `video_codec`): el WS del stream quedó listo. */
+    ready: async (videoCodec = "H264") => {
       const fns = pendingCreate;
       pendingCreate = [];
-      fns.forEach((fn) => fn());
+      fns.forEach((fn) => fn(videoCodec));
       await Bun.sleep(1);
     },
     closeWs: (code: number) => wsListeners.forEach((fn) => fn({ code })),

@@ -247,7 +247,13 @@ export function createGoLive(deps: {
       else if (!audio) videoOnly(STREAM_ERRORS.noDesktopAudio, "no-pipewire");
     }
 
-    const shim = createGoLiveShim({ gateway, meId: me, lib });
+    // El servidor elige el códec de video del stream (op 4, y puede cambiarlo con un op 14); mandamos solo H264.
+    const onCodec = (codec: string, op: 4 | 14): void => {
+      if (codec === "H264" || active !== a) return;
+      log.error("golive.codec-mismatch", { mode: codec, op });
+      notice(STREAM_ERRORS.codecMismatch(codec), "error", "golive-codec");
+    };
+    const shim = createGoLiveShim({ gateway, meId: me, lib, onCodec });
     a.shim = shim;
     shim.attachVoice(a.guildId, a.channelId, sessionId);
     wrapCreateStream(a, shim.streamer);

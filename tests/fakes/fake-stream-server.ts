@@ -19,6 +19,8 @@ export interface FakeStreamServer {
   closeWith(code: number): void;
   /** Paquetes RTP de video que el relay le reenvió a los que miran. */
   relayed(): number;
+  /** Manda un op de texto por el WS abierto (p. ej. un op 14 SESSION_UPDATE). */
+  sendOp(op: number, d: unknown): void;
   /** Manda un paquete (RTCP: PLI, NACK, RR…) al que transmite por su track de video. false si todavía no hay track. */
   sendToStreamer(buf: Uint8Array): boolean;
   stop(): void;
@@ -31,7 +33,7 @@ export interface FakeStreamServer {
  * del op 4 (1 por defecto; 0 = sin E2EE).
  */
 export function startFakeStreamServer(
-  opts: { relay?: boolean; dave?: number; streamerId?: string; /** Cada paquete de video que llega del que transmite (con la hora). */ onStreamerPacket?: (msg: Buffer, at: number) => void } = {},
+  opts: { relay?: boolean; dave?: number; streamerId?: string; /** video_codec del op 4 (H264 por defecto). */ videoCodec?: string; /** Cada paquete de video que llega del que transmite (con la hora). */ onStreamerPacket?: (msg: Buffer, at: number) => void } = {},
 ): FakeStreamServer {
   const dir = mkdtempSync(join(tmpdir(), "golive-tls-"));
   Bun.spawnSync(
@@ -102,7 +104,7 @@ export function startFakeStreamServer(
           const peer = new PeerConnection("srv", { iceServers: [], bindAddress: "127.0.0.1" });
           peers.push(peer); // referencia viva: Bun junta con el GC lo que no se referencia
           const ack = (sdp: string) => {
-            ws.send(JSON.stringify({ op: 4, d: { sdp: `${sdp}\na=rtcp:50000\n`, dave_protocol_version: opts.dave ?? 1, audio_codec: "opus", video_codec: "H264" } }));
+            ws.send(JSON.stringify({ op: 4, d: { sdp: `${sdp}\na=rtcp:50000\n`, dave_protocol_version: opts.dave ?? 1, audio_codec: "opus", video_codec: opts.videoCodec ?? "H264" } }));
           };
           if (opts.relay) {
             // Que conecte de verdad: la respuesta con los candidatos ya juntados (el cliente toma el `a=candidate`).
@@ -154,6 +156,9 @@ export function startFakeStreamServer(
     endpoint: `127.0.0.1:${server.port}`,
     connections: () => connections,
     relayed: () => relayed,
+    sendOp(op, d) {
+      open?.send(JSON.stringify({ op, d }));
+    },
     sendToStreamer(buf) {
       const streamer = [...conns.values()].find((c) => c.streaming);
       if (!streamer?.videoTrack?.isOpen()) return false;
