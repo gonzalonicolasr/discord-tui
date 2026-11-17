@@ -246,3 +246,102 @@ export class H264Depacketizer {
     }
   }
 }
+
+/** "tipo:cantidad" ordenado por tipo (para el log). */
+function histogram(h: Map<number, number>): string {
+  return [...h.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([k, v]) => `${k}:${v}`)
+    .join(",");
+}
+
+const bump = (h: Map<number, number>, k: number): void => void h.set(k, (h.get(k) ?? 0) + 1);
+
+/**
+ * Números del RTP H264 que llega, para watch.diag (nunca bytes ni contenido): sirve para ver si lo que llega es H264
+ * con IDR que no reconocemos, H264 sin IDR, u otra cosa (otro códec o NAL cifrados).
+ *   n / mk   paquetes / paquetes con marker
+ *   pay      tamaño del payload min/medio/máx (bytes, sin encabezado RTP ni padding); "-" sin paquetes
+ *   pad      paquetes sin payload (solo padding: sondeo de ancho de banda)
+ *   fbit     paquetes cuyo primer byte tiene el bit F en 1 (no parece H264)
+ *   jumps    veces que el número de secuencia no fue el anterior + 1; gap = números que faltaron yendo hacia adelante
+ *   ts       cambios de timestamp (≈ cuadros)
+ *   nal      tipos de NAL simple; stap = tipos dentro de STAP-A; fu = tipo del NAL original de cada FU-A; fuS = FU-A con
+ *            bit de inicio
+ */
+export class RtpH264Stats {
+  private n = 0;
+  private marker = 0;
+  private pad = 0;
+  private fbit = 0;
+  private jumps = 0;
+  private gap = 0;
+  private tsChanges = 0;
+  private sizeMin = Infinity;
+  private sizeMax = 0;
+  private sizeSum = 0;
+  private lastSeq: number | null = null;
+  private lastTs: number | null = null;
+  private single = new Map<number, number>();
+  private stap = new Map<number, number>();
+  private fu = new Map<number, number>();
+  private fuStart = 0;
+
+  observe(pkt: RtpPacket): void {
+    this.n++;
+    if (pkt.marker) this.marker++;
+    if (this.lastSeq !== null) {
+      const d = seqDiff(pkt.sequence, this.lastSeq);
+      if (d !== 1) {
+        this.jumps++;
+        if (d > 1 && d < 1000) this.gap += d - 1;
+      }
+    }
+    this.lastSeq = pkt.sequence;
+    if (this.lastTs !== null && pkt.timestamp !== this.lastTs) this.tsChanges++;
+    this.lastTs = pkt.timestamp;
+    const p = pkt.payload;
+    this.sizeMin = Math.min(this.sizeMin, p.length);
+    this.sizeMax = Math.max(this.sizeMax, p.length);
+    this.sizeSum += p.length;
+    if (p.length === 0) {
+      this.pad++;
+      return;
+    }
+    if (p[0]! & 0x80) {
+      this.fbit++;
+      return;
+    }
+    const type = p[0]! & 0x1f;
+    if (type === 24) {
+      let o = 1;
+      while (o + 2 <= p.length) {
+        const size = (p[o]! << 8) | p[o + 1]!;
+        o += 2;
+        if (size === 0 || o + size > p.length) break;
+        bump(this.stap, p[o]! & 0x1f);
+        o += size;
+      }
+    } else if (type === 28 && p.length >= 2) {
+      bump(this.fu, p[1]! & 0x1f);
+      if (p[1]! & 0x80) this.fuStart++;
+    } else bump(this.single, type);
+  }
+
+  summary() {
+    return {
+      n: this.n,
+      mk: this.marker,
+      pay: this.n ? `${this.sizeMin}/${Math.round(this.sizeSum / this.n)}/${this.sizeMax}` : "-",
+      pad: this.pad,
+      fbit: this.fbit,
+      jumps: this.jumps,
+      gap: this.gap,
+      ts: this.tsChanges,
+      nal: histogram(this.single),
+      stap: histogram(this.stap),
+      fu: histogram(this.fu),
+      fuS: this.fuStart,
+    };
+  }
+}

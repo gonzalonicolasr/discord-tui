@@ -1,6 +1,6 @@
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 
-import { H264Depacketizer, KEYFRAME_PATIENCE, KEYFRAME_RETRY, assembleAccessUnit, hasIdr, parseRtp, splitAnnexB, type RtpPacket } from "../../src/watch/h264";
+import { H264Depacketizer, KEYFRAME_PATIENCE, KEYFRAME_RETRY, RtpH264Stats, assembleAccessUnit, hasIdr, parseRtp, splitAnnexB, type RtpPacket } from "../../src/watch/h264";
 
 function rtp(opts: { seq: number; ts: number; marker?: boolean; pt?: number; ssrc?: number; payload: Uint8Array; ext?: boolean; pad?: number }): Uint8Array {
   const ext = opts.ext ? new Uint8Array([0xbe, 0xde, 0, 1, 0x10, 0xaa, 0, 0]) : new Uint8Array(0);
@@ -107,4 +107,62 @@ test("sequence numbers wrap around 65535", () => {
   expect(d.push(pkt({ seq: 65535, ts: 0, marker: true, payload: IDR }))).toHaveLength(1);
   expect(d.push(pkt({ seq: 0, ts: 3000, marker: true, payload: P }))).toHaveLength(1);
   expect(d.push(pkt({ seq: 65535, ts: 0, marker: true, payload: IDR }))).toEqual([]); // duplicado viejo
+});
+
+describe("RtpH264Stats (numbers for watch.diag)", () => {
+  const stap = (...nals: Uint8Array[]) => new Uint8Array([0x18, ...nals.flatMap((n) => [n.length >> 8, n.length & 0xff, ...n])]);
+  const fu = (nal: number, start: boolean, end: boolean, data: number[] = [9, 9]) =>
+    new Uint8Array([(nal & 0xe0) | 28, (start ? 0x80 : 0) | (end ? 0x40 : 0) | (nal & 0x1f), ...data]);
+
+  test("counts NAL types of single NALs, inside STAP-A and of the original NAL of each FU-A, and FU-A starts", () => {
+    const s = new RtpH264Stats();
+    s.observe(pkt({ seq: 1, ts: 0, payload: stap(SPS, PPS) }));
+    s.observe(pkt({ seq: 2, ts: 0, payload: fu(0x65, true, false) }));
+    s.observe(pkt({ seq: 3, ts: 0, payload: fu(0x65, false, false) }));
+    s.observe(pkt({ seq: 4, ts: 0, marker: true, payload: fu(0x65, false, true) }));
+    s.observe(pkt({ seq: 5, ts: 3000, marker: true, payload: P }));
+    const d = s.summary();
+    expect(d.nal).toBe("1:1");
+    expect(d.stap).toBe("7:1,8:1");
+    expect(d.fu).toBe("5:3");
+    expect(d.fuS).toBe(1);
+    expect(d.n).toBe(5);
+    expect(d.mk).toBe(2);
+    expect(d.ts).toBe(1);
+  });
+
+  test("payload size min/avg/max, padding-only packets, the F bit and sequence jumps", () => {
+    const s = new RtpH264Stats();
+    s.observe(pkt({ seq: 10, ts: 0, payload: new Uint8Array([0x41, 1, 2, 3, 4, 5]) })); // 6
+    s.observe(pkt({ seq: 11, ts: 0, payload: new Uint8Array([0x41, 1]) })); // 2
+    s.observe(pkt({ seq: 15, ts: 0, payload: new Uint8Array([0xc1, 1, 2, 3]) })); // salto de 3, F=1, 4
+    s.observe(pkt({ seq: 16, ts: 0, payload: new Uint8Array(0), pad: 4 })); // solo padding
+    const d = s.summary();
+    expect(d.pay).toBe("0/3/6");
+    expect(d.pad).toBe(1);
+    expect(d.fbit).toBe(1);
+    expect(d.jumps).toBe(1);
+    expect(d.gap).toBe(3);
+    // el primer byte de un paquete con F=1 no cuenta como tipo de NAL de H264
+    expect(d.nal).toBe("1:2");
+  });
+
+  test("wraps the sequence number without counting a jump, and a reorder is a jump but not a gap", () => {
+    const s = new RtpH264Stats();
+    for (const seq of [65534, 65535, 0, 1]) s.observe(pkt({ seq, ts: 0, payload: P }));
+    expect(s.summary()).toMatchObject({ jumps: 0, gap: 0 });
+    s.observe(pkt({ seq: 0, ts: 0, payload: P })); // vuelve atrás
+    expect(s.summary()).toMatchObject({ jumps: 1, gap: 0 });
+  });
+
+  test("an unknown or reserved NAL type (another codec or encrypted bytes) shows up as its number", () => {
+    const s = new RtpH264Stats();
+    s.observe(pkt({ seq: 1, ts: 0, payload: new Uint8Array([0x1e, 1]) })); // 30: reservado
+    s.observe(pkt({ seq: 2, ts: 0, payload: new Uint8Array([0x00, 1]) })); // 0: no especificado
+    expect(s.summary().nal).toBe("0:1,30:1");
+  });
+
+  test("empty summary before any packet", () => {
+    expect(new RtpH264Stats().summary()).toEqual({ n: 0, mk: 0, pay: "-", pad: 0, fbit: 0, jumps: 0, gap: 0, ts: 0, nal: "", stap: "", fu: "", fuS: 0 });
+  });
 });
