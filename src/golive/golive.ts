@@ -57,6 +57,13 @@ interface Active {
   stats: StreamStats | null;
 }
 
+/** `ZCORD_GOLIVE_AUDIO`: "1" = el audio de la PC, "silence" = silencio (prueba), cualquier otra cosa = sin audio. */
+export function goLiveAudioFromEnv(value: string | undefined): boolean | "silence" {
+  if (value === "1") return true;
+  if (value === "silence") return "silence";
+  return false;
+}
+
 export function createGoLive(deps: {
   store: Store;
   gateway: GoLiveGateway;
@@ -69,8 +76,10 @@ export function createGoLive(deps: {
    * Mandar el audio de la PC con la transmisión. Apagado salvo `ZCORD_GOLIVE_AUDIO=1`: con audio, Discord cierra
    * el stream a los 30 s (4006, "la sesión de la transmisión ya no es válida"; visto el 2026-11-16 en todas las
    * transmisiones). Sin esto la transmisión es solo video, como antes de que existiera el audio.
+   * `"silence"` (`ZCORD_GOLIVE_AUDIO=silence`, prueba): el mismo camino con audio pero mandando silencio, sin capturar
+   * nada de la PC ni usar PipeWire.
    */
-  desktopAudio?: boolean;
+  desktopAudio?: boolean | "silence";
   /** Diagnóstico de la transmisión (inyectable para los tests). */
   stats?: (conn: unknown) => StreamStats;
 }): GoLive {
@@ -79,7 +88,8 @@ export function createGoLive(deps: {
   const startCapture = deps.startCapture ?? startCaptureDefault;
   const pickEncoder = deps.pickEncoder ?? ((e: CaptureEnv) => pickEncoderDefault(e));
   const loadLib = deps.loadLib ?? loadGoLiveLib;
-  const desktopAudio = deps.desktopAudio ?? process.env.ZCORD_GOLIVE_AUDIO === "1";
+  const desktopAudio = deps.desktopAudio ?? goLiveAudioFromEnv(process.env.ZCORD_GOLIVE_AUDIO);
+  const silence = desktopAudio === "silence";
   const makeStats = deps.stats ?? ((conn: unknown) => watchStream(conn, { log }));
 
   /** El diagnóstico nunca corta ni frena la transmisión: si tira, se sigue sin él. */
@@ -230,7 +240,7 @@ export function createGoLive(deps: {
     const encoder = await pickEncoder(env).catch(() => "x264" as const);
     if (active !== a) return;
     // El audio de la PC solo con wf-recorder: grim va a ~10 fps irregulares y ffmpeg frenaría el audio.
-    let audio = desktopAudio && backend === "wf-recorder" && (await probeDesktopAudio(env).catch(() => false));
+    let audio = !!desktopAudio && backend === "wf-recorder" && (silence || (await probeDesktopAudio(env).catch(() => false)));
     if (active !== a) return;
     if (desktopAudio) {
       if (backend === "grim") videoOnly(STREAM_ERRORS.noDesktopAudioGrim, "grim");
@@ -244,7 +254,7 @@ export function createGoLive(deps: {
 
     let capture: CaptureHandle;
     try {
-      capture = startCapture({ backend, encoder, monitor, quality, env, audio });
+      capture = startCapture({ backend, encoder, monitor, quality, env, audio, ...(audio && silence ? { audioSource: "silence" as const } : {}) });
     } catch (error) {
       if (!audio) return void finish(a, STREAM_ERRORS.captureEnded);
       log.warn("golive.audio-failed", { error_name: error instanceof Error ? error.name : "error" });
@@ -277,8 +287,9 @@ export function createGoLive(deps: {
         a.capture = capture;
       }
     }
-    setStream({ desktopAudio: audio });
-    log.info("golive.start", { mode: `${backend}/${encoder}${audio ? "+audio" : ""}`, state: state.settings.streamQuality });
+    // Con silencio la barra no dice "con audio de la PC": no sale nada de la PC.
+    setStream({ desktopAudio: audio && !silence });
+    log.info("golive.start", { mode: `${backend}/${encoder}${audio ? (silence ? "+silence" : "+audio") : ""}`, state: state.settings.streamQuality });
     if (backend === "grim") notice(GRIM_SLOW, "info");
     void capture.ended.then(() => {
       if (active === a) void finish(a, STREAM_ERRORS.captureEnded);

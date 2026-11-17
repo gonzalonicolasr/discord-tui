@@ -20,6 +20,7 @@ import {
   type ProcLike,
   type SpawnOpts,
 } from "../../src/golive/capture";
+import { silenceAudioCommand } from "../../src/golive/desktop-audio";
 import { fakeToken } from "../helpers/fake-token";
 
 const has = (...bins: string[]) => (bin: string) => bins.includes(bin);
@@ -490,6 +491,31 @@ describe("process cleanup (real processes standing in for wf-recorder / grim / f
     expect(spawned.length).toBe(after); // el enlazador también paró
   });
 
+  test("ZCORD_GOLIVE_AUDIO=silence: a silence source feeds ffmpeg's fd 3 instead of pw-record, nothing PipeWire runs", async () => {
+    const SLEEP = ["sh", "-c", "exec sleep 30"];
+    const asked: string[][] = [];
+    const opts: Record<string, SpawnOpts> = {};
+    const { env, spawned } = standIns((cmd) => (cmd.includes("anullsrc=r=48000:cl=stereo") || cmd[0] === "wf-recorder" ? SLEEP : cmd[0] === "ffmpeg" ? FFMPEG_FD4 : ["false"]));
+    const spawn = env.spawn;
+    env.spawn = (cmd, o) => {
+      asked.push(cmd);
+      if (!cmd.includes("anullsrc=r=48000:cl=stereo")) opts[cmd[0]!] = o;
+      return spawn(cmd, o);
+    };
+    const handle = startCapture({ backend: "wf-recorder", encoder: "x264", monitor: "DP-1", quality: QUALITY["720p30"], env, audio: true, audioSource: "silence" });
+    expect(asked[0]!).toContain("pipe:3");
+    expect(opts.ffmpeg!.fd3).toBe("pipe");
+    expect(asked[1]!).toContain("-D");
+    expect(asked[2]!).toEqual(silenceAudioCommand());
+    await Bun.sleep(80);
+    expect(asked).toHaveLength(3);
+    expect(spawned.every((s) => alive(s.pid))).toBe(true);
+    expect(asked.some((cmd) => cmd[0]!.startsWith("pw-"))).toBe(false);
+    await handle.stop();
+    await Bun.sleep(20);
+    expect(spawned.filter((s) => alive(s.pid))).toEqual([]);
+  });
+
   test("if pw-record dies mid-stream the capture ends (a stuck audio clock would freeze the video)", async () => {
     const { env, spawned } = audioStandIns(["true"]);
     const handle = startCapture({ backend: "wf-recorder", encoder: "x264", monitor: "", quality: QUALITY["720p30"], env, audio: true });
@@ -706,3 +732,23 @@ test.skipIf(!ffmpegReady)("real ffmpeg with audio: when the capture stops on its
   expect(spawned.filter((s) => ["wf-recorder", "ffmpeg", "pw-record"].includes(s.name) && alive(s.pid))).toEqual([]);
   await handle.stop();
 }, 20_000);
+
+// La fuente de ZCORD_GOLIVE_AUDIO=silence, con el ffmpeg real: PCM s16 48 kHz estéreo en ceros, a ritmo real (-re).
+test.skipIf(!ffmpegReady)("the silence source writes real-time s16 48 kHz stereo zeros", async () => {
+  const proc = defaultCaptureEnv.spawn(silenceAudioCommand(), { stdin: "ignore", stdout: "pipe", stderr: "ignore" });
+  const chunks: Uint8Array[] = [];
+  const reader = (proc.stdout as ReadableStream<Uint8Array>).getReader();
+  const until = Date.now() + 1_000;
+  while (Date.now() < until) {
+    const { value, done } = await Promise.race([reader.read(), Bun.sleep(until - Date.now()).then(() => ({ value: undefined, done: false }))]);
+    if (done) break;
+    if (value) chunks.push(value);
+  }
+  proc.kill("SIGKILL");
+  await proc.exited;
+  const bytes = chunks.reduce((n, c) => n + c.length, 0);
+  // 1 s a 48 kHz × 2 canales × 2 bytes = 192.000; a ritmo real, no de golpe
+  expect(bytes).toBeGreaterThan(96_000);
+  expect(bytes).toBeLessThan(400_000);
+  expect(chunks.every((c) => c.every((b) => b === 0))).toBe(true);
+}, 10_000);

@@ -12,7 +12,7 @@ import { Readable } from "node:stream";
 import { log } from "../log/logger";
 import { spawnClean } from "../proc/spawn";
 import type { StreamQuality } from "../settings/settings";
-import { desktopAudioCommand, startAudioLinker, type AudioLinker } from "./desktop-audio";
+import { desktopAudioCommand, silenceAudioCommand, startAudioLinker, type AudioLinker } from "./desktop-audio";
 
 export type CaptureBackend = "wf-recorder" | "grim";
 export type VideoEncoder = "nvenc" | "vaapi" | "x264";
@@ -459,6 +459,8 @@ export function startCapture(opts: {
   quality: Quality;
   env?: CaptureEnv;
   audio?: boolean;
+  /** De dónde sale el audio: la PC (pw-record, por defecto) o silencio (prueba `ZCORD_GOLIVE_AUDIO=silence`). */
+  audioSource?: "pc" | "silence";
   audioGraceMs?: number;
   audioTimeoutMs?: number;
 }): CaptureHandle {
@@ -530,12 +532,14 @@ export function startCapture(opts: {
     }
   };
 
-  /** pw-record → fd 3 de ffmpeg. Si no se puede, mata lo que ya arrancó y tira. */
+  /** pw-record (o el silencio de prueba) → fd 3 de ffmpeg. Si no se puede, mata lo que ya arrancó y tira. */
   const attachAudio = (): void => {
     if (!audio) return;
-    const rec = feed(AUDIO_FD, desktopAudioCommand());
+    const silence = opts.audioSource === "silence";
+    const rec = feed(AUDIO_FD, silence ? silenceAudioCommand() : desktopAudioCommand());
     recorder = rec;
-    linker = startAudioLinker({ env, recorderPid: rec.pid });
+    // Con silencio no hay nada que enlazar: no corre nada de PipeWire.
+    if (!silence) linker = startAudioLinker({ env, recorderPid: rec.pid });
     // Sin audio la librería frena el video esperándolo (lo sincroniza contra el audio): mejor cortar.
     void rec.exited.then(
       (code) => {

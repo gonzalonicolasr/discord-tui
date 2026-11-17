@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import type { CaptureEnv, ProcLike } from "../../src/golive/capture";
 import { STREAM_ERRORS } from "../../src/golive/errors";
-import { createGoLive } from "../../src/golive/golive";
+import { createGoLive, goLiveAudioFromEnv } from "../../src/golive/golive";
 import { createStore, emptyState } from "../../src/store/store";
 import { fakeCapture, fakeGoLiveLib } from "../fakes/fake-golive";
 import { fakeGateway } from "../fakes/fake-stream-server";
@@ -17,7 +17,7 @@ function textProc(text: string): ProcLike {
   return { pid: 1, stdout: new Response(text).body!, exited: Promise.resolve(0), kill() {} };
 }
 
-function setup(opts: { tools?: string[]; monitors?: unknown[]; inVoice?: boolean; session?: boolean; pwDumpExit?: number; failWithAudio?: boolean; audioReady?: Promise<boolean> | boolean; desktopAudio?: boolean; statsFails?: "start" | "stop" } = {}) {
+function setup(opts: { tools?: string[]; monitors?: unknown[]; inVoice?: boolean; session?: boolean; pwDumpExit?: number; failWithAudio?: boolean; audioReady?: Promise<boolean> | boolean; desktopAudio?: boolean | "silence"; statsFails?: "start" | "stop" } = {}) {
   /** Diagnóstico falso: con qué conexión arrancó y cómo terminó cada uno. */
   const statsRuns: Array<{ conn: unknown; stops: string[] }> = [];
   const stats = (conn: unknown) => {
@@ -176,6 +176,24 @@ describe("PC audio", () => {
     expect(s.stream()).toMatchObject({ status: "live", desktopAudio: true });
     await s.golive.stop();
     expect(s.stream().desktopAudio).toBeUndefined();
+  });
+
+  test("ZCORD_GOLIVE_AUDIO=silence: the capture carries silence, needs no PipeWire, and the bar does not claim PC audio", async () => {
+    const s = setup({ desktopAudio: "silence" });
+    await goLive(s, "DP-1");
+    expect(s.capture.started[0]).toMatchObject({ backend: "wf-recorder", audio: true, audioSource: "silence" });
+    expect(s.spawned).not.toContainEqual(["pw-dump"]);
+    expect(s.notices().some((t) => t.includes("audio"))).toBe(false);
+    expect(s.stream()).toMatchObject({ status: "live", desktopAudio: false });
+    await s.golive.stop();
+  });
+
+  test("ZCORD_GOLIVE_AUDIO: 1 = PC audio, silence = silence, anything else = off", () => {
+    expect(goLiveAudioFromEnv("1")).toBe(true);
+    expect(goLiveAudioFromEnv("silence")).toBe("silence");
+    expect(goLiveAudioFromEnv(undefined)).toBe(false);
+    expect(goLiveAudioFromEnv("0")).toBe(false);
+    expect(goLiveAudioFromEnv("yes")).toBe(false);
   });
 
   test("without the PipeWire tools: video only, as before, with a notice", async () => {

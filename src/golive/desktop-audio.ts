@@ -53,6 +53,15 @@ export function desktopAudioCommand(): string[] {
   ];
 }
 
+/**
+ * Prueba `ZCORD_GOLIVE_AUDIO=silence`: en vez de pw-record, silencio con el mismo formato (s16 48 kHz estéreo), a
+ * ritmo real (`-re`, como llega de PipeWire). No captura nada de la PC: sirve para ver si Discord corta por el audio
+ * en sí o por lo que se captura.
+ */
+export function silenceAudioCommand(): string[] {
+  return ["ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-re", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1"];
+}
+
 function parentOf(pid: number): number | null {
   try {
     const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
